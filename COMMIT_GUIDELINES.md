@@ -65,7 +65,9 @@ WIP
 Commit messages are automatically validated using:
 
 - **Husky**: Git hooks management
-- **Commitlint**: Commit message validation
-- **Lint-staged**: Pre-commit linting and formatting
+- **Commitlint**: Commit message validation (via `pnpm commitlint`)
+- **Lint-staged**: Pre-commit linting and formatting (via `pnpm lint-staged`)
 
 If your commit message doesn't follow the conventional commit format, the commit will be rejected.
+
+**Note**: This project uses `pnpm` as the package manager, so all hooks use `pnpm` commands instead of `npx`.
