@@ -18,9 +18,23 @@ export interface Document {
 /**
  * Generate folder path based on document ID structure
  * @param id Document ID
- * @returns Folder path (e.g., "_sync/att" for "_sync:att:sha1-...", undefined for simple IDs)
+ * @returns Folder path (e.g., "_sync/att" for "_sync:att:sha1-...", "pl" for "pl_...", undefined for simple IDs)
  */
 function generateFolderPath(id: string): string | undefined {
+  // Handle underscore-prefixed IDs (pl_, mc_, u_, user_)
+  if (id.startsWith('pl_')) {
+    return 'pl'
+  }
+  if (id.startsWith('mc_')) {
+    return 'mc'
+  }
+  if (id.startsWith('u_')) {
+    return 'u'
+  }
+  if (id.startsWith('user_')) {
+    return 'user'
+  }
+
   // Split by colon to get the parts
   const parts = id.split(':')
 
@@ -37,9 +51,23 @@ function generateFolderPath(id: string): string | undefined {
 /**
  * Generate filename based on document ID structure
  * @param id Document ID
- * @returns Filename (e.g., "sha1-abc123" for "_sync:att:sha1-abc123", full ID for simple IDs)
+ * @returns Filename (e.g., "sha1-abc123" for "_sync:att:sha1-abc123", "123" for "pl_123", full ID for simple IDs)
  */
 function generateFilename(id: string): string {
+  // Handle underscore-prefixed IDs (pl_, mc_, u_, user_)
+  if (id.startsWith('pl_')) {
+    return id.substring(3) // Remove "pl_" prefix
+  }
+  if (id.startsWith('mc_')) {
+    return id.substring(3) // Remove "mc_" prefix
+  }
+  if (id.startsWith('u_')) {
+    return id.substring(2) // Remove "u_" prefix
+  }
+  if (id.startsWith('user_')) {
+    return id.substring(5) // Remove "user_" prefix
+  }
+
   // Split by colon to get the parts
   const parts = id.split(':')
 
