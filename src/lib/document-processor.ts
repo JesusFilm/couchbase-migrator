@@ -16,6 +16,45 @@ export interface Document {
 }
 
 /**
+ * Generate folder path based on document ID structure
+ * @param id Document ID
+ * @returns Folder path (e.g., "_sync/att" for "_sync:att:sha1-...", undefined for simple IDs)
+ */
+function generateFolderPath(id: string): string | undefined {
+  // Split by colon to get the parts
+  const parts = id.split(':')
+
+  if (parts.length >= 2) {
+    // For IDs like "_sync:att:sha1-..." -> "_sync/att"
+    // For IDs like "user:123" -> "user"
+    const folderParts = parts.slice(0, 2)
+    return folderParts.join('/')
+  }
+
+  return undefined
+}
+
+/**
+ * Generate filename based on document ID structure
+ * @param id Document ID
+ * @returns Filename (e.g., "sha1-abc123" for "_sync:att:sha1-abc123", full ID for simple IDs)
+ */
+function generateFilename(id: string): string {
+  // Split by colon to get the parts
+  const parts = id.split(':')
+
+  if (parts.length >= 2) {
+    // For IDs like "_sync:att:sha1-abc123" -> "sha1-abc123"
+    // For IDs like "user:123" -> "123"
+    const lastPart = parts[parts.length - 1]
+    return lastPart || id // Fallback to full ID if last part is empty
+  }
+
+  // For simple IDs without colons, use the full ID
+  return id
+}
+
+/**
  * Detect file type from binary buffer and return appropriate extension
  * @param buffer Binary data buffer
  * @returns File extension (including dot) or '.bin' as fallback
@@ -95,98 +134,61 @@ export async function getDocuments(
 
   // Get required objects from the client
   const cluster = await client.getCluster()
-  const bucket = await client.getBucket()
   const config = client.getConfig()
-  const collection = bucket.defaultCollection()
 
-  // First, get document IDs using N1QL (this works fine)
+  // Get documents with both metadata and content using N1QL
   const query = `
-      SELECT META().id as id
+      SELECT META().id as id, META().cas as cas, * 
       FROM \`${config.bucketName}\`
       LIMIT $LIMIT OFFSET $OFFSET
     `
 
   const result = await withRetry(
     () =>
-      cluster.query<{ id: string }>(query, {
-        parameters: {
-          LIMIT: limit + 1,
-          OFFSET: offset,
-        },
-      }),
+      cluster.query<{ id: string; cas: string; [key: string]: unknown }>(
+        query,
+        {
+          timeout: config.operationTimeout,
+          parameters: {
+            LIMIT: limit + 1,
+            OFFSET: offset,
+          },
+        }
+      ),
     3, // max retries
-    500 // base delay in ms (shorter for queries)
+    500
   )
 
   const hasMore = result.rows.length > limit
-  const documentIds = result.rows.slice(0, limit)
+  const documents = result.rows.slice(0, limit)
   const nextOffset = hasMore ? offset + limit : offset
 
   let documentsProcessed = 0
   let documentsSkipped = 0
 
-  for (const { id } of documentIds) {
+  for (const doc of documents) {
+    const { id, ...content } = doc
     try {
-      // Check if file already exists in temp directory
-      const safeFilename = id.replace(/[^a-zA-Z0-9._-]/g, '_')
-      const tempDir = './tmp'
-
-      // Ensure temp directory exists
-      await fs.mkdir(tempDir, { recursive: true })
-
-      // Check for existing files with common extensions
-      const possibleExtensions = [
-        '.jpg',
-        '.jpeg',
-        '.png',
-        '.gif',
-        '.pdf',
-        '.bin',
-      ]
-      let existingFile = null
-
-      for (const ext of possibleExtensions) {
-        const filePath = path.join(tempDir, `${safeFilename}${ext}`)
-        try {
-          await fs.access(filePath)
-          existingFile = filePath
-          break
-        } catch {
-          // File doesn't exist with this extension, continue
+      // Check if this is a binary attachment (starts with _sync:att:)
+      const isAttachment =
+        id.startsWith('_sync:att:') || id.startsWith('_sync:rev:')
+      if (isAttachment) {
+        // Handle binary attachments
+        const wasProcessed = await processAttachment(id, client)
+        if (wasProcessed) {
+          documentsProcessed++
+        } else {
+          documentsSkipped++
+        }
+      } else {
+        // Handle JSON documents
+        const wasProcessed = await processJsonDocument(id, content)
+        if (wasProcessed) {
+          documentsProcessed++
+        } else {
+          documentsSkipped++
         }
       }
-
-      if (existingFile) {
-        console.log(
-          `⏭️ Skipping document ${id} - already exists: ${existingFile}`
-        )
-        documentsSkipped++
-        continue
-      }
-
-      // Fetch the document
-      const doc = await withRetry(
-        () =>
-          collection.get(id, {
-            timeout: config.operationTimeout,
-          }),
-        3, // max retries
-        1000 // base delay in ms
-      )
-
-      console.log(
-        `✅ Fetched document: ${id} (${(doc.content as Buffer).length} bytes)`
-      )
-
-      // Process the document immediately
-      const document: Document = {
-        id,
-        content: doc.content as Buffer,
-        cas: doc.cas.toString(),
-      }
-
-      await processDocument(document)
-      documentsProcessed++
     } catch (error) {
       console.error(`❌ Error processing document ${id}:`, error)
       // Continue with other documents even if one fails
@@ -202,34 +204,136 @@ export async function getDocuments(
 }
 
 /**
- * Process a single document asynchronously
- * @param document Document to process
- * @returns Promise that resolves when processing is complete
+ * Process a single attachment asynchronously
+ * @param id Attachment document ID
+ * @param client Couchbase client instance
+ * @returns Promise that resolves to true if processed, false if skipped
  */
-export async function processDocument(document: Document): Promise<void> {
+export async function processAttachment(
+  id: string,
+  client: CouchbaseClient
+): Promise<boolean> {
   try {
-    console.log(`🔄 Processing document: ${document.id}`)
+    const config = client.getConfig()
+    const bucket = await client.getBucket()
+    const collection = bucket.defaultCollection()
 
-    // Ensure output directory exists
-    await fs.mkdir('./tmp', { recursive: true })
+    // Handle binary attachments
+    const filename = generateFilename(id)
+    const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const folderPath = generateFolderPath(id)
+    const tempDir = folderPath ? path.join('./tmp', folderPath) : './tmp'
+
+    // Ensure temp directory exists
+    await fs.mkdir(tempDir, { recursive: true })
+
+    // Check for existing files with common extensions
+    const possibleExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.pdf', '.bin']
+    let existingFile = null
+
+    for (const ext of possibleExtensions) {
+      const filePath = path.join(tempDir, `${safeFilename}${ext}`)
+      try {
+        await fs.access(filePath)
+        existingFile = filePath
+        break
+      } catch {
+        // File doesn't exist with this extension, continue
+      }
+    }
+
+    if (existingFile) {
+      console.log(
+        `⏭️ Skipping attachment ${id} - already exists: ${existingFile}`
+      )
+      return false
+    }
+
+    // Fetch the binary attachment using collection.get
+    const binaryDoc = await withRetry(
+      () =>
+        collection.get(id, {
+          timeout: config.operationTimeout,
+        }),
+      3, // max retries
+      1000 // base delay in ms
+    )
+
+    console.log(
+      `✅ Fetched attachment: ${id} (${(binaryDoc.content as Buffer).length} bytes)`
+    )
+
+    // Process the binary document
+    const document: Document = {
+      id,
+      content: binaryDoc.content as Buffer,
+      cas: binaryDoc.cas.toString(),
+    }
+
+    console.log(`🔄 Processing attachment: ${document.id}`)
 
     // Detect file type and get appropriate extension
     const fileExtension = await detectFileExtension(document.content)
 
-    // Create a safe filename from the document ID
-    const safeFilename = document.id.replace(/[^a-zA-Z0-9._-]/g, '_')
-    const filePath = path.join('./tmp', `${safeFilename}${fileExtension}`)
+    // Create file path with detected extension
+    const filePath = path.join(tempDir, `${safeFilename}${fileExtension}`)
 
     // Write buffer content to file
     await fs.writeFile(filePath, document.content)
 
-    console.log(`📁 Written document ${document.id} to: ${filePath}`)
+    console.log(`📁 Written attachment ${document.id} to: ${filePath}`)
     console.log(`📊 File size: ${document.content.length} bytes`)
     console.log(`🔍 Detected file type: ${fileExtension}`)
 
-    console.log(`✅ Successfully processed document: ${document.id}`)
+    console.log(`✅ Successfully processed attachment: ${document.id}`)
+    return true
   } catch (error) {
-    console.error(`❌ Error processing document ${document.id}:`, error)
+    console.error(`❌ Error processing attachment ${id}:`, error)
+    throw error
+  }
+}
+
+/**
+ * Process a single JSON document asynchronously
+ * @param id Document ID
+ * @param content Document content (JSON object)
+ * @returns Promise that resolves to true if processed, false if skipped
+ */
+export async function processJsonDocument(
+  id: string,
+  content: Record<string, unknown>
+): Promise<boolean> {
+  try {
+    console.log(`📄 Processing JSON document: ${id}`)
+
+    // Create a JSON file for the document
+    const filename = generateFilename(id)
+    const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const folderPath = generateFolderPath(id)
+    const tempDir = folderPath ? path.join('./tmp', folderPath) : './tmp'
+    await fs.mkdir(tempDir, { recursive: true })
+
+    const jsonFilePath = path.join(tempDir, `${safeFilename}.json`)
+
+    // Check if JSON file already exists
+    try {
+      await fs.access(jsonFilePath)
+      console.log(
+        `⏭️ Skipping JSON document ${id} - already exists: ${jsonFilePath}`
+      )
+      return false
+    } catch {
+      // File doesn't exist, continue processing
+    }
+
+    // Write JSON document to file
+    const jsonContent = JSON.stringify(content, null, 2)
+    await fs.writeFile(jsonFilePath, jsonContent, 'utf8')
+
+    console.log(`✅ Written JSON document: ${id} to ${jsonFilePath}`)
+    return true
+  } catch (error) {
+    console.error(`❌ Error processing JSON document ${id}:`, error)
     throw error
   }
 }

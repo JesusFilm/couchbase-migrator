@@ -130,7 +130,7 @@ export class CouchbaseClient {
 
     try {
       const diagnostics = await this.cluster.diagnostics()
-      return `Connected to cluster (${diagnostics.toString()})`
+      return `Connected to cluster (${JSON.stringify(diagnostics)})`
     } catch (error) {
       console.error('❌ Error getting cluster info:', error)
       throw error

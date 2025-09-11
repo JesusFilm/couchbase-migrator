@@ -20,7 +20,7 @@ export async function main(): Promise<void> {
     console.log('\n📄 Starting full document migration...')
 
     let offset = 0
-    const limit = 100
+    const limit = 1000
     let totalProcessed = 0
     let totalSkipped = 0
     let pageNumber = 1
