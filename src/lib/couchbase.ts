@@ -1,5 +1,5 @@
-import { Cluster, Bucket, Collection } from 'couchbase';
-import { env } from './env';
+import { Cluster, Bucket, Collection, ConnectOptions } from 'couchbase';
+import { env } from '@/lib/env';
 
 export interface CouchbaseConfig {
   connectionString: string;
@@ -10,10 +10,7 @@ export interface CouchbaseConfig {
   collectionName: string;
   connectionTimeout: number;
   operationTimeout: number;
-  useSSL: boolean;
-  certPath?: string | undefined;
-  keyPath?: string | undefined;
-  certAuthPath?: string | undefined;
+  trustStorePath?: string; // Path to trust store file for SSL certificate validation
 }
 
 class CouchbaseClient {
@@ -35,10 +32,9 @@ class CouchbaseClient {
       collectionName: env.COUCHBASE_COLLECTION_NAME,
       connectionTimeout: env.COUCHBASE_CONNECTION_TIMEOUT,
       operationTimeout: env.COUCHBASE_OPERATION_TIMEOUT,
-      useSSL: env.COUCHBASE_USE_SSL,
-      certPath: env.COUCHBASE_CERT_PATH,
-      keyPath: env.COUCHBASE_KEY_PATH,
-      certAuthPath: env.COUCHBASE_CERT_AUTH_PATH,
+      ...(env.COUCHBASE_TRUST_STORE_PATH && {
+        trustStorePath: env.COUCHBASE_TRUST_STORE_PATH,
+      }),
       ...config,
     };
   }
@@ -56,9 +52,9 @@ class CouchbaseClient {
   }
 
   /**
-   * Ensure client is connected (auto-initializes if needed)
+   * Connect to Couchbase (auto-initializes if needed)
    */
-  public async ensureConnected(): Promise<CouchbaseClient> {
+  public async connect(): Promise<CouchbaseClient> {
     if (this.isConnected) {
       return this;
     }
@@ -67,34 +63,29 @@ class CouchbaseClient {
       return this.initPromise;
     }
 
-    this.initPromise = this.connect().then(() => this);
+    this.initPromise = this._establishConnection().then(() => this);
     await this.initPromise;
     return this;
   }
 
   /**
-   * Connect to Couchbase cluster
+   * Establish connection to Couchbase cluster (internal method)
    */
-  async connect(): Promise<void> {
+  private async _establishConnection(): Promise<void> {
     try {
       console.log('🔌 Connecting to Couchbase cluster...');
       console.log(`📍 Connection string: ${this.config.connectionString}`);
       console.log(`👤 Username: ${this.config.username}`);
       console.log(`🪣 Bucket: ${this.config.bucketName}`);
 
-      const options = {
+      const options: ConnectOptions = {
         username: this.config.username,
         password: this.config.password,
       };
 
-      // Add SSL configuration if enabled
-      if (this.config.useSSL) {
-        (options as any).securityConfig = {
-          tls: {
-            certPath: this.config.certPath,
-            keyPath: this.config.keyPath,
-            certAuthPath: this.config.certAuthPath,
-          },
+      if (this.config.trustStorePath) {
+        options.security = {
+          trustStorePath: this.config.trustStorePath,
         };
       }
 
@@ -152,7 +143,8 @@ class CouchbaseClient {
       const diagnostics = await this.cluster.diagnostics();
       return `Connected to cluster (${diagnostics.id})`;
     } catch (error) {
-      return 'Unable to retrieve cluster info';
+      console.error('❌ Error getting cluster info:', error);
+      throw error;
     }
   }
 
@@ -160,7 +152,7 @@ class CouchbaseClient {
    * Get the collection instance (auto-connects if needed)
    */
   async getCollection(): Promise<Collection> {
-    await this.ensureConnected();
+    await this.connect();
     if (!this.collection) {
       throw new Error('Failed to get collection after connection');
     }
@@ -171,7 +163,7 @@ class CouchbaseClient {
    * Get the bucket instance (auto-connects if needed)
    */
   async getBucket(): Promise<Bucket> {
-    await this.ensureConnected();
+    await this.connect();
     if (!this.bucket) {
       throw new Error('Failed to get bucket after connection');
     }
@@ -182,7 +174,7 @@ class CouchbaseClient {
    * Get the cluster instance (auto-connects if needed)
    */
   async getCluster(): Promise<Cluster> {
-    await this.ensureConnected();
+    await this.connect();
     if (!this.cluster) {
       throw new Error('Failed to get cluster after connection');
     }
@@ -190,38 +182,10 @@ class CouchbaseClient {
   }
 
   /**
-   * Test the connection with a simple operation
-   */
-  async testConnection(): Promise<boolean> {
-    try {
-      const collection = await this.getCollection();
-      const testKey = 'test-connection';
-      const testDoc = {
-        message: 'Hello Couchbase!',
-        timestamp: new Date().toISOString(),
-      };
-
-      // Try to upsert a test document
-      await collection.upsert(testKey, testDoc);
-
-      // Try to get the test document
-      await collection.get(testKey);
-
-      // Clean up the test document
-      await collection.remove(testKey);
-
-      console.log('✅ Connection test successful!');
-      return true;
-    } catch (error) {
-      console.error('❌ Connection test failed:', error);
-      return false;
-    }
-  }
-
-  /**
    * Get configuration (without sensitive data)
    */
   getConfig(): Omit<CouchbaseConfig, 'password'> {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { password, ...safeConfig } = this.config;
     return safeConfig;
   }
@@ -246,6 +210,4 @@ class CouchbaseClient {
   }
 }
 
-// Export the singleton instance
 export const client = CouchbaseClient.getInstance();
-export { CouchbaseClient };

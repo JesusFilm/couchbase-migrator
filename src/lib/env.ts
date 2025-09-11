@@ -22,10 +22,7 @@ export const env = createEnv({
     COUCHBASE_OPERATION_TIMEOUT: z.coerce.number().default(5000),
 
     // SSL Configuration
-    COUCHBASE_USE_SSL: z.coerce.boolean().default(false),
-    COUCHBASE_CERT_PATH: z.string().optional(),
-    COUCHBASE_KEY_PATH: z.string().optional(),
-    COUCHBASE_CERT_AUTH_PATH: z.string().optional(),
+    COUCHBASE_TRUST_STORE_PATH: z.string().optional(),
   },
   runtimeEnv: {
     COUCHBASE_CONNECTION_STRING: process.env['COUCHBASE_CONNECTION_STRING'],
@@ -36,10 +33,7 @@ export const env = createEnv({
     COUCHBASE_COLLECTION_NAME: process.env['COUCHBASE_COLLECTION_NAME'],
     COUCHBASE_CONNECTION_TIMEOUT: process.env['COUCHBASE_CONNECTION_TIMEOUT'],
     COUCHBASE_OPERATION_TIMEOUT: process.env['COUCHBASE_OPERATION_TIMEOUT'],
-    COUCHBASE_USE_SSL: process.env['COUCHBASE_USE_SSL'],
-    COUCHBASE_CERT_PATH: process.env['COUCHBASE_CERT_PATH'],
-    COUCHBASE_KEY_PATH: process.env['COUCHBASE_KEY_PATH'],
-    COUCHBASE_CERT_AUTH_PATH: process.env['COUCHBASE_CERT_AUTH_PATH'],
+    COUCHBASE_TRUST_STORE_PATH: process.env['COUCHBASE_TRUST_STORE_PATH'],
   },
   skipValidation: !!process.env['SKIP_ENV_VALIDATION'],
 });
