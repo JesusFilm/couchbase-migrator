@@ -7,7 +7,7 @@
  */
 
 import { client } from '@/lib/couchbase'
-import { processDocument } from '@/lib/document-processor'
+import { getDocuments } from '@/lib/document-processor'
 
 // Main execution
 export async function main(): Promise<void> {
@@ -16,29 +16,57 @@ export async function main(): Promise<void> {
 
     console.log('✨ Migration framework ready!')
 
-    // Demonstrate pagination of binary documents
-    console.log('\n📄 getting documents...')
-    const paginationResult = await client.getDocuments()
+    // Paginate through all documents
+    console.log('\n📄 Starting full document migration...')
 
-    console.log(
-      `📋 Retrieved ${paginationResult.documents.length} documents in this page`
-    )
-    console.log(`🔄 Has more pages: ${paginationResult.hasMore}`)
+    let offset = 0
+    const limit = 100
+    let totalProcessed = 0
+    let totalSkipped = 0
+    let pageNumber = 1
 
-    if (paginationResult.documents.length > 0) {
-      console.log('\n📄 Processing documents...')
+    while (true) {
+      console.log(`\n📄 Processing page ${pageNumber} (offset: ${offset})...`)
+      const paginationResult = await getDocuments(client, { offset, limit })
 
-      // Process each document asynchronously and await completion
-      for (const document of paginationResult.documents) {
-        await processDocument(document)
+      const documentsInPage =
+        paginationResult.documentsProcessed + paginationResult.documentsSkipped
+      totalProcessed += paginationResult.documentsProcessed
+      totalSkipped += paginationResult.documentsSkipped
+
+      console.log(`📋 Retrieved ${documentsInPage} documents in this page`)
+      console.log(`✅ Processed: ${paginationResult.documentsProcessed}`)
+      console.log(`⏭️ Skipped: ${paginationResult.documentsSkipped}`)
+      console.log(`🔄 Has more pages: ${paginationResult.hasMore}`)
+
+      if (documentsInPage > 0) {
+        console.log(
+          `✅ Successfully processed ${paginationResult.documentsProcessed} documents in page ${pageNumber}`
+        )
+      } else {
+        console.log(`ℹ️ No documents found in page ${pageNumber}`)
       }
 
-      console.log(
-        `\n✅ Successfully processed all ${paginationResult.documents.length} documents`
-      )
-    } else {
-      console.log('ℹ️ No documents found in the collection')
+      // Update offset for next page
+      offset = paginationResult.nextOffset
+      pageNumber++
+
+      // Check if we should continue
+      if (!paginationResult.hasMore) {
+        console.log('\n🏁 No more pages available - migration complete!')
+        break
+      }
+
+      // Add a small delay between pages to be gentle on the server
+      await new Promise(resolve => setTimeout(resolve, 100))
     }
+
+    // Final statistics
+    console.log('\n📊 Migration Summary:')
+    console.log(`📄 Total pages processed: ${pageNumber - 1}`)
+    console.log(`📋 Total documents found: ${totalProcessed + totalSkipped}`)
+    console.log(`✅ Total documents processed: ${totalProcessed}`)
+    console.log(`⏭️ Total documents skipped (already existed): ${totalSkipped}`)
   } catch (error) {
     console.error('❌ Error during Couchbase operations:', error)
   } finally {

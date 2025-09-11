@@ -1,6 +1,5 @@
 import { Cluster, Bucket, ConnectOptions } from 'couchbase'
 import { env } from '@/lib/env'
-import { Document } from './document-processor'
 
 export interface CouchbaseConfig {
   connectionString: string
@@ -12,7 +11,7 @@ export interface CouchbaseConfig {
   trustStorePath?: string // Path to trust store file for SSL certificate validation
 }
 
-class CouchbaseClient {
+export class CouchbaseClient {
   private static instance: CouchbaseClient | null = null
   private cluster: Cluster | null = null
   private bucket: Bucket | null = null
@@ -174,56 +173,6 @@ class CouchbaseClient {
    */
   isClientConnected(): boolean {
     return this.isConnected
-  }
-
-  /**
-   * Paginate binary documents in the collection using a single query
-   * @param limit Maximum number of documents to return (default: 10)
-   * @param offset Number of documents to skip (default: 0)
-   * @returns Promise containing paginated results
-   */
-  async getDocuments(options?: { offset?: number; limit?: number }): Promise<{
-    documents: Array<Document>
-    hasMore: boolean
-    nextOffset: number
-  }> {
-    const { offset = 0, limit = 10 } = options ?? {}
-
-    const cluster = await this.getCluster()
-
-    // Get paginated documents with content in a single query
-    const query = `
-        SELECT META().id as id, 
-               *,
-               META().cas as cas
-        FROM \`${this.config.bucketName}\`
-        LIMIT $LIMIT OFFSET $OFFSET
-      `
-
-    const result = await cluster.query(query, {
-      parameters: {
-        LIMIT: limit + 1,
-        OFFSET: offset,
-      },
-    })
-
-    // Check if we have more pages by requesting one extra document
-    const hasMore = result.rows.length > limit
-    const documents = result.rows.slice(0, limit) // Take only the requested amount
-    const nextOffset = hasMore ? offset + limit : offset
-
-    // Transform results
-    console.log(documents)
-    const transformedDocuments = documents.map(row => ({
-      id: row.id,
-      content: Buffer.from(row['JFM-profiles']), // Convert to Buffer
-      cas: row.cas.toString(),
-    }))
-    return {
-      documents: transformedDocuments,
-      hasMore,
-      nextOffset,
-    }
   }
 
   /**
