@@ -14,8 +14,6 @@ export const env = createEnv({
 
     // Bucket Configuration
     COUCHBASE_BUCKET_NAME: z.string().default('default'),
-    COUCHBASE_SCOPE_NAME: z.string().default('_default'),
-    COUCHBASE_COLLECTION_NAME: z.string().default('_default'),
 
     // Connection Options
     COUCHBASE_CONNECTION_TIMEOUT: z.coerce.number().default(10000),
@@ -29,8 +27,6 @@ export const env = createEnv({
     COUCHBASE_USERNAME: process.env['COUCHBASE_USERNAME'],
     COUCHBASE_PASSWORD: process.env['COUCHBASE_PASSWORD'],
     COUCHBASE_BUCKET_NAME: process.env['COUCHBASE_BUCKET_NAME'],
-    COUCHBASE_SCOPE_NAME: process.env['COUCHBASE_SCOPE_NAME'],
-    COUCHBASE_COLLECTION_NAME: process.env['COUCHBASE_COLLECTION_NAME'],
     COUCHBASE_CONNECTION_TIMEOUT: process.env['COUCHBASE_CONNECTION_TIMEOUT'],
     COUCHBASE_OPERATION_TIMEOUT: process.env['COUCHBASE_OPERATION_TIMEOUT'],
     COUCHBASE_TRUST_STORE_PATH: process.env['COUCHBASE_TRUST_STORE_PATH'],

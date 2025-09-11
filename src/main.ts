@@ -14,6 +14,26 @@ export async function main(): Promise<void> {
     await client.connect()
 
     console.log('✨ Migration framework ready!')
+
+    // Demonstrate pagination of binary documents
+    console.log('\n📄 Paginating binary documents...')
+    const paginationResult = await client.paginateBinaryDocuments()
+
+    console.log(
+      `📋 Retrieved ${paginationResult.documents.length} documents in this page`
+    )
+    console.log(`🔄 Has more pages: ${paginationResult.hasMore}`)
+
+    if (paginationResult.documents.length > 0) {
+      console.log('\n📄 Document details:')
+      paginationResult.documents.forEach((doc, index) => {
+        console.log(`  ${index + 1}. ID: ${doc.id}`)
+        console.log(`     Size: ${doc.content.length} bytes`)
+        console.log(`     CAS: ${doc.cas}`)
+      })
+    } else {
+      console.log('ℹ️ No documents found in the collection')
+    }
   } catch (error) {
     console.error('❌ Error during Couchbase operations:', error)
   } finally {

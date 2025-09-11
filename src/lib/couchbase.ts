@@ -1,4 +1,4 @@
-import { Cluster, Bucket, Collection, ConnectOptions } from 'couchbase'
+import couchbase, { Cluster, Bucket, ConnectOptions } from 'couchbase'
 import { env } from '@/lib/env'
 
 export interface CouchbaseConfig {
@@ -6,8 +6,6 @@ export interface CouchbaseConfig {
   username: string
   password: string
   bucketName: string
-  scopeName: string
-  collectionName: string
   connectionTimeout: number
   operationTimeout: number
   trustStorePath?: string // Path to trust store file for SSL certificate validation
@@ -17,7 +15,6 @@ class CouchbaseClient {
   private static instance: CouchbaseClient | null = null
   private cluster: Cluster | null = null
   private bucket: Bucket | null = null
-  private collection: Collection | null = null
   private config: CouchbaseConfig
   private isConnected: boolean = false
   private initPromise: Promise<CouchbaseClient> | null = null
@@ -28,8 +25,6 @@ class CouchbaseClient {
       username: env.COUCHBASE_USERNAME,
       password: env.COUCHBASE_PASSWORD,
       bucketName: env.COUCHBASE_BUCKET_NAME,
-      scopeName: env.COUCHBASE_SCOPE_NAME,
-      collectionName: env.COUCHBASE_COLLECTION_NAME,
       connectionTimeout: env.COUCHBASE_CONNECTION_TIMEOUT,
       operationTimeout: env.COUCHBASE_OPERATION_TIMEOUT,
       ...(env.COUCHBASE_TRUST_STORE_PATH && {
@@ -89,16 +84,13 @@ class CouchbaseClient {
         }
       }
 
-      this.cluster = await Cluster.connect(
+      this.cluster = await couchbase.connect(
         this.config.connectionString,
         options
       )
 
-      // Get bucket and collection
+      // Get bucket (using default scope and collection)
       this.bucket = this.cluster.bucket(this.config.bucketName)
-      this.collection = this.bucket
-        .scope(this.config.scopeName)
-        .collection(this.config.collectionName)
 
       this.isConnected = true
       console.log('✅ Successfully connected to Couchbase!')
@@ -118,7 +110,6 @@ class CouchbaseClient {
         await this.cluster.close()
         this.cluster = null
         this.bucket = null
-        this.collection = null
         this.isConnected = false
         this.initPromise = null
         console.log('🔌 Disconnected from Couchbase')
@@ -146,17 +137,6 @@ class CouchbaseClient {
       console.error('❌ Error getting cluster info:', error)
       throw error
     }
-  }
-
-  /**
-   * Get the collection instance (auto-connects if needed)
-   */
-  async getCollection(): Promise<Collection> {
-    await this.connect()
-    if (!this.collection) {
-      throw new Error('Failed to get collection after connection')
-    }
-    return this.collection
   }
 
   /**
@@ -195,6 +175,64 @@ class CouchbaseClient {
    */
   isClientConnected(): boolean {
     return this.isConnected
+  }
+
+  /**
+   * Paginate binary documents in the collection using a single query
+   * @param limit Maximum number of documents to return (default: 10)
+   * @param offset Number of documents to skip (default: 0)
+   * @returns Promise containing paginated results
+   */
+  async paginateBinaryDocuments(options?: {
+    offset?: number
+    limit?: number
+  }): Promise<{
+    documents: Array<{ id: string; content: Buffer; cas: string }>
+    hasMore: boolean
+    nextOffset: number
+  }> {
+    const { offset = 0, limit = 10 } = options ?? {}
+
+    try {
+      const cluster = await this.getCluster()
+
+      // Get paginated documents with content in a single query
+      const query = `
+        SELECT META().id as id, 
+               *,
+               META().cas as cas
+        FROM \`${this.config.bucketName}\`
+        LIMIT $LIMIT OFFSET $OFFSET
+      `
+
+      const result = await cluster.query(query, {
+        parameters: {
+          LIMIT: limit + 1,
+          OFFSET: offset,
+        },
+      })
+
+      // Check if we have more pages by requesting one extra document
+      const hasMore = result.rows.length > limit
+      const documents = result.rows.slice(0, limit) // Take only the requested amount
+      const nextOffset = hasMore ? offset + limit : offset
+
+      // Transform results
+      const transformedDocuments = documents.map((row: any) => ({
+        id: row.id,
+        content: Buffer.from(row.content), // Convert to Buffer
+        cas: row.cas.toString(),
+      }))
+
+      return {
+        documents: transformedDocuments,
+        hasMore,
+        nextOffset,
+      }
+    } catch (error) {
+      console.error('❌ Error paginating binary documents:', error)
+      throw error
+    }
   }
 
   /**
