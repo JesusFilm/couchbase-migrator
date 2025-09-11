@@ -1,9 +1,9 @@
-import { createEnv } from '@t3-oss/env-core';
-import { z } from 'zod';
-import { config } from 'dotenv';
+import { createEnv } from '@t3-oss/env-core'
+import { z } from 'zod'
+import { config } from 'dotenv'
 
 // Load environment variables from .env file
-config();
+config()
 
 export const env = createEnv({
   server: {
@@ -36,4 +36,4 @@ export const env = createEnv({
     COUCHBASE_TRUST_STORE_PATH: process.env['COUCHBASE_TRUST_STORE_PATH'],
   },
   skipValidation: !!process.env['SKIP_ENV_VALIDATION'],
-});
+})
