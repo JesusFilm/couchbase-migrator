@@ -1,4 +1,4 @@
-import couchbase, { Cluster, Bucket, ConnectOptions } from 'couchbase'
+import { Cluster, Bucket, ConnectOptions } from 'couchbase'
 import { env } from '@/lib/env'
 
 export interface CouchbaseConfig {
@@ -84,7 +84,7 @@ class CouchbaseClient {
         }
       }
 
-      this.cluster = await couchbase.connect(
+      this.cluster = await Cluster.connect(
         this.config.connectionString,
         options
       )
@@ -183,21 +183,17 @@ class CouchbaseClient {
    * @param offset Number of documents to skip (default: 0)
    * @returns Promise containing paginated results
    */
-  async paginateBinaryDocuments(options?: {
-    offset?: number
-    limit?: number
-  }): Promise<{
+  async getDocuments(options?: { offset?: number; limit?: number }): Promise<{
     documents: Array<{ id: string; content: Buffer; cas: string }>
     hasMore: boolean
     nextOffset: number
   }> {
     const { offset = 0, limit = 10 } = options ?? {}
 
-    try {
-      const cluster = await this.getCluster()
+    const cluster = await this.getCluster()
 
-      // Get paginated documents with content in a single query
-      const query = `
+    // Get paginated documents with content in a single query
+    const query = `
         SELECT META().id as id, 
                *,
                META().cas as cas
@@ -205,33 +201,29 @@ class CouchbaseClient {
         LIMIT $LIMIT OFFSET $OFFSET
       `
 
-      const result = await cluster.query(query, {
-        parameters: {
-          LIMIT: limit + 1,
-          OFFSET: offset,
-        },
-      })
+    const result = await cluster.query(query, {
+      parameters: {
+        LIMIT: limit + 1,
+        OFFSET: offset,
+      },
+    })
 
-      // Check if we have more pages by requesting one extra document
-      const hasMore = result.rows.length > limit
-      const documents = result.rows.slice(0, limit) // Take only the requested amount
-      const nextOffset = hasMore ? offset + limit : offset
+    // Check if we have more pages by requesting one extra document
+    const hasMore = result.rows.length > limit
+    const documents = result.rows.slice(0, limit) // Take only the requested amount
+    const nextOffset = hasMore ? offset + limit : offset
 
-      // Transform results
-      const transformedDocuments = documents.map((row: any) => ({
-        id: row.id,
-        content: Buffer.from(row.content), // Convert to Buffer
-        cas: row.cas.toString(),
-      }))
+    // Transform results
+    const transformedDocuments = documents.map((row: any) => ({
+      id: row.id,
+      content: Buffer.from(row.content), // Convert to Buffer
+      cas: row.cas.toString(),
+    }))
 
-      return {
-        documents: transformedDocuments,
-        hasMore,
-        nextOffset,
-      }
-    } catch (error) {
-      console.error('❌ Error paginating binary documents:', error)
-      throw error
+    return {
+      documents: transformedDocuments,
+      hasMore,
+      nextOffset,
     }
   }
 

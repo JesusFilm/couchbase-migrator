@@ -16,8 +16,8 @@ export async function main(): Promise<void> {
     console.log('✨ Migration framework ready!')
 
     // Demonstrate pagination of binary documents
-    console.log('\n📄 Paginating binary documents...')
-    const paginationResult = await client.paginateBinaryDocuments()
+    console.log('\n📄 getting documents...')
+    const paginationResult = await client.getDocuments()
 
     console.log(
       `📋 Retrieved ${paginationResult.documents.length} documents in this page`
