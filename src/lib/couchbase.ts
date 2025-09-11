@@ -1,5 +1,6 @@
 import { Cluster, Bucket, ConnectOptions } from 'couchbase'
 import { env } from '@/lib/env'
+import { Document } from './document-processor'
 
 export interface CouchbaseConfig {
   connectionString: string
@@ -79,9 +80,7 @@ class CouchbaseClient {
       }
 
       if (this.config.trustStorePath) {
-        options.security = {
-          trustStorePath: this.config.trustStorePath,
-        }
+        options.trustStorePath = this.config.trustStorePath
       }
 
       this.cluster = await Cluster.connect(
@@ -132,7 +131,7 @@ class CouchbaseClient {
 
     try {
       const diagnostics = await this.cluster.diagnostics()
-      return `Connected to cluster (${diagnostics.id})`
+      return `Connected to cluster (${diagnostics.toString()})`
     } catch (error) {
       console.error('❌ Error getting cluster info:', error)
       throw error
@@ -184,7 +183,7 @@ class CouchbaseClient {
    * @returns Promise containing paginated results
    */
   async getDocuments(options?: { offset?: number; limit?: number }): Promise<{
-    documents: Array<{ id: string; content: Buffer; cas: string }>
+    documents: Array<Document>
     hasMore: boolean
     nextOffset: number
   }> {
@@ -214,12 +213,12 @@ class CouchbaseClient {
     const nextOffset = hasMore ? offset + limit : offset
 
     // Transform results
-    const transformedDocuments = documents.map((row: any) => ({
+    console.log(documents)
+    const transformedDocuments = documents.map(row => ({
       id: row.id,
-      content: Buffer.from(row.content), // Convert to Buffer
+      content: Buffer.from(row['JFM-profiles']), // Convert to Buffer
       cas: row.cas.toString(),
     }))
-
     return {
       documents: transformedDocuments,
       hasMore,

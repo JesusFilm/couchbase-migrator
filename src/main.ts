@@ -7,6 +7,7 @@
  */
 
 import { client } from '@/lib/couchbase'
+import { processDocument } from '@/lib/document-processor'
 
 // Main execution
 export async function main(): Promise<void> {
@@ -25,12 +26,16 @@ export async function main(): Promise<void> {
     console.log(`🔄 Has more pages: ${paginationResult.hasMore}`)
 
     if (paginationResult.documents.length > 0) {
-      console.log('\n📄 Document details:')
-      paginationResult.documents.forEach((doc, index) => {
-        console.log(`  ${index + 1}. ID: ${doc.id}`)
-        console.log(`     Size: ${doc.content.length} bytes`)
-        console.log(`     CAS: ${doc.cas}`)
-      })
+      console.log('\n📄 Processing documents...')
+
+      // Process each document asynchronously and await completion
+      for (const document of paginationResult.documents) {
+        await processDocument(document)
+      }
+
+      console.log(
+        `\n✅ Successfully processed all ${paginationResult.documents.length} documents`
+      )
     } else {
       console.log('ℹ️ No documents found in the collection')
     }
