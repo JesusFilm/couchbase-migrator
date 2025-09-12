@@ -252,3 +252,5 @@ coverage/
 # Couchbase specific
 *.couchbase
 .couchbase/
+
+/src/generated/prisma
