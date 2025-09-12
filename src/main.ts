@@ -6,15 +6,40 @@
  * This is the main entry point for the Couchbase migration tool.
  */
 
-import { client } from '@/lib/couchbase'
-import { getDocuments } from '@/lib/document-processor'
+import { Command } from 'commander'
+import { client } from './lib/couchbase.js'
+import { getDocuments } from './lib/document-processor.js'
+
+// Create commander program
+const program = new Command()
+
+program
+  .name('couchbase-migrator')
+  .description('Document migration tool for Couchbase')
+  .version('1.0.0')
+  .option(
+    '--skip-attachments',
+    'skip processing binary attachments (only process JSON documents)'
+  )
+  .action(async options => {
+    await main(options)
+  })
 
 // Main execution
-export async function main(): Promise<void> {
+export async function main(
+  options: { skipAttachments?: boolean } = {}
+): Promise<void> {
   try {
+    const { skipAttachments = false } = options
+
     await client.connect()
 
     console.log('✨ Migration framework ready!')
+    if (skipAttachments) {
+      console.log(
+        '⏭️ Skipping binary attachments - processing JSON documents only'
+      )
+    }
 
     // Paginate through all documents
     console.log('\n📄 Starting full document migration...')
@@ -27,7 +52,11 @@ export async function main(): Promise<void> {
 
     while (true) {
       console.log(`\n📄 Processing page ${pageNumber} (offset: ${offset})...`)
-      const paginationResult = await getDocuments(client, { offset, limit })
+      const paginationResult = await getDocuments(client, {
+        offset,
+        limit,
+        skipAttachments,
+      })
 
       const documentsInPage =
         paginationResult.documentsProcessed + paginationResult.documentsSkipped
@@ -78,9 +107,7 @@ export async function main(): Promise<void> {
   }
 }
 
+// Parse command line arguments and execute program
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch(error => {
-    console.error('❌ Fatal error:', error)
-    process.exit(1)
-  })
+  program.parse()
 }

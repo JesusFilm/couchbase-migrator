@@ -151,14 +151,14 @@ async function withRetry<T>(
  */
 export async function getDocuments(
   client: CouchbaseClient,
-  options?: { offset?: number; limit?: number }
+  options?: { offset?: number; limit?: number; skipAttachments?: boolean }
 ): Promise<{
   documentsProcessed: number
   documentsSkipped: number
   hasMore: boolean
   nextOffset: number
 }> {
-  const { offset = 0, limit = 10 } = options ?? {}
+  const { offset = 0, limit = 10, skipAttachments = false } = options ?? {}
 
   // Get required objects from the client
   const cluster = await client.getCluster()
@@ -200,6 +200,14 @@ export async function getDocuments(
       // Check if this is a binary attachment (starts with _sync:att:)
       const isAttachment =
         id.startsWith('_sync:att:') || id.startsWith('_sync:rev:')
+
+      if (isAttachment && skipAttachments) {
+        // Skip binary attachments when skipAttachments is enabled
+        console.log(`⏭️ attachment: ${id} (--skip-attachments enabled)`)
+        documentsSkipped++
+        continue
+      }
+
       if (isAttachment) {
         // Handle binary attachments
         const wasProcessed = await processAttachment(id, client)
@@ -271,9 +279,7 @@ export async function processAttachment(
     }
 
     if (existingFile) {
-      console.log(
-        `⏭️ Skipping attachment ${id} - already exists: ${existingFile}`
-      )
+      console.log(`⏭️ attachment: ${existingFile} (already exists)`)
       return false
     }
 
@@ -287,18 +293,12 @@ export async function processAttachment(
       1000 // base delay in ms
     )
 
-    console.log(
-      `✅ Fetched attachment: ${id} (${(binaryDoc.content as Buffer).length} bytes)`
-    )
-
     // Process the binary document
     const document: Document = {
       id,
       content: binaryDoc.content as Buffer,
       cas: binaryDoc.cas.toString(),
     }
-
-    console.log(`🔄 Processing attachment: ${document.id}`)
 
     // Detect file type and get appropriate extension
     const fileExtension = await detectFileExtension(document.content)
@@ -309,11 +309,21 @@ export async function processAttachment(
     // Write buffer content to file
     await fs.writeFile(filePath, document.content)
 
-    console.log(`📁 Written attachment ${document.id} to: ${filePath}`)
-    console.log(`📊 File size: ${document.content.length} bytes`)
-    console.log(`🔍 Detected file type: ${fileExtension}`)
+    // Format file size appropriately (KB or MB)
+    const fileSizeBytes = document.content.length
+    const fileSizeKB = fileSizeBytes / 1024
+    const fileSizeMB = fileSizeBytes / (1024 * 1024)
 
-    console.log(`✅ Successfully processed attachment: ${document.id}`)
+    let sizeDisplay: string
+    if (fileSizeMB >= 1) {
+      sizeDisplay = `${fileSizeMB.toFixed(2)} MB`
+    } else {
+      sizeDisplay = `${fileSizeKB.toFixed(2)} KB`
+    }
+
+    // Show clean message with relative path and appropriate size
+    const relativePath = filePath.replace('./', '')
+    console.log(`✅ attachment: ${relativePath} (${sizeDisplay})`)
     return true
   } catch (error) {
     console.error(`❌ Error processing attachment ${id}:`, error)
@@ -332,8 +342,6 @@ export async function processJsonDocument(
   content: Record<string, unknown>
 ): Promise<boolean> {
   try {
-    console.log(`📄 Processing JSON document: ${id}`)
-
     // Create a JSON file for the document
     const filename = generateFilename(id)
     const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -346,9 +354,8 @@ export async function processJsonDocument(
     // Check if JSON file already exists
     try {
       await fs.access(jsonFilePath)
-      console.log(
-        `⏭️ Skipping JSON document ${id} - already exists: ${jsonFilePath}`
-      )
+      const relativePath = jsonFilePath.replace('./', '')
+      console.log(`⏭️ JSON document: ${relativePath} (already exists)`)
       return false
     } catch {
       // File doesn't exist, continue processing
@@ -358,7 +365,9 @@ export async function processJsonDocument(
     const jsonContent = JSON.stringify(content, null, 2)
     await fs.writeFile(jsonFilePath, jsonContent, 'utf8')
 
-    console.log(`✅ Written JSON document: ${id} to ${jsonFilePath}`)
+    // Show clean message with relative path
+    const relativePath = jsonFilePath.replace('./', '')
+    console.log(`✅ JSON document: ${relativePath}`)
     return true
   } catch (error) {
     console.error(`❌ Error processing JSON document ${id}:`, error)

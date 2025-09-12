@@ -40,6 +40,7 @@
   },
   "dependencies": {
     "@t3-oss/env-core": "^0.13.8",
+    "commander": "^14.0.0",
     "couchbase": "^3.2.7",
     "dotenv": "^17.2.2",
     "file-type": "^21.0.0",
