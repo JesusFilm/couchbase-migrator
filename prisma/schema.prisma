@@ -3,7 +3,7 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../node_modules/.prisma"
+  output   = "../src/__generated__/prisma"
 }
 
 datasource db {
@@ -21,7 +21,6 @@ model User {
   nameFirst             String
   nameLast              String
   homeCountry           String?
-  owner                 String
   notificationCountries String   @default("[]") // JSON array as string
   createdAt             DateTime
   updatedAt             DateTime

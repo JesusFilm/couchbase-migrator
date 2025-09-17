@@ -7,8 +7,7 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { z } from 'zod'
-import { prisma } from '../../lib/prisma.js'
-import { Prisma } from '.prisma/client'
+import { prisma, Prisma, User } from '../../lib/prisma.js'
 
 // Zod schemas for user data validation
 const SyncDataSchema = z.object({
@@ -105,44 +104,59 @@ function validateAndTransformUser(rawData: unknown): UserProfile | null {
  * @param filePath Path to the user JSON file
  * @returns Processed user data or null if processing failed
  */
-async function processUserFile(filePath: string): Promise<any | null> {
+async function processUserFile(
+  filePath: string,
+  dryRun: boolean
+): Promise<User | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
     const rawData = JSON.parse(fileContent)
 
     const userData = validateAndTransformUser(rawData)
     if (!userData) {
+      console.log(`⏭️ Skipping invalid user file: ${filePath}`)
+      return null
+    }
+
+    if (dryRun) {
+      console.log(`⏭️ Skipping user ${userData.theKeySsoGuid} in dry run`)
       return null
     }
 
     // Save to database using Prisma
     try {
       const user: Prisma.UserCreateInput = {
-        ...userData,
-        id: userData.theKeySsoGuid,
+        id: userData.owner,
+        theKeySsoGuid: userData.theKeySsoGuid,
+        theKeyGuid: userData.theKeyGuid,
+        theKeyRelayGuid: userData.theKeyRelayGuid,
+        theKeyGrPersonId: userData.theKeyGrPersonId || null,
+        email: userData.email,
+        nameFirst: userData.nameFirst,
+        nameLast: userData.nameLast,
+        homeCountry: userData.homeCountry || null,
+        notificationCountries: userData.notificationCountries.join(','),
+        createdAt: new Date(userData.createdAt),
+        updatedAt: new Date(userData.updatedAt),
+        cas: BigInt(userData.cas),
         syncRev: userData._sync.rev,
         syncSequence: userData._sync.sequence,
         syncRecentSequences: userData._sync.recent_sequences.join(','),
         syncTimeSaved: userData._sync.time_saved,
-        theKeyGrPersonId: userData.theKeyGrPersonId || null,
-        homeCountry: userData.homeCountry || null,
-        notificationCountries: userData.notificationCountries.join(','),
         ingestedAt: new Date(),
-        cas: BigInt(userData.cas),
       }
 
       const savedUser = await prisma.user.upsert({
-        where: { theKeySsoGuid: userData.theKeySsoGuid },
+        where: { id: userData.owner },
         update: user,
         create: user,
       })
 
+      console.log(`✅ Saved user ${userData.owner}`)
+
       return savedUser
     } catch (dbError) {
-      console.error(
-        `❌ Database error for user ${userData.theKeySsoGuid}:`,
-        dbError
-      )
+      console.error(`❌ Database error for user ${userData.owner}:`, dbError)
       return null
     }
   } catch (error) {
@@ -205,7 +219,7 @@ export async function ingestUsers(
   let errorCount = 0
 
   for (const filePath of userFiles) {
-    const processedUser = await processUserFile(filePath)
+    const processedUser = await processUserFile(filePath, dryRun)
     if (processedUser) {
       processedUsers.push(processedUser)
       successCount++

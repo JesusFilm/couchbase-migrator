@@ -253,4 +253,4 @@ coverage/
 *.couchbase
 .couchbase/
 
-/src/generated/prisma
+/src/__generated__/prisma
