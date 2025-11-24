@@ -1,0 +1,557 @@
+generator apiMediaClient {
+  provider = "prisma-client-js"
+  output   = "../../src/lib/prisma/api-media/__generated__"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("PRISMA_API_MEDIA_URL")
+}
+
+model ArclightApiKey {
+  key             String          @unique
+  desc            String?
+  defaultPlatform DefaultPlatform
+}
+
+model BibleBook {
+  id                   String          @id
+  osisId               String
+  alternateName        String?
+  paratextAbbreviation String
+  isNewTestament       Boolean
+  order                Int
+  BibleBookName        BibleBookName[]
+  BibleCitation        BibleCitation[]
+}
+
+model BibleBookName {
+  id          String    @id
+  value       String
+  languageId  String
+  primary     Boolean
+  bibleBookId String
+  BibleBook   BibleBook @relation(fields: [bibleBookId], references: [id])
+
+  @@unique([bibleBookId, languageId])
+  @@index([languageId])
+  @@index([primary])
+  @@index([value])
+}
+
+model BibleCitation {
+  id           String    @id
+  bibleBookId  String
+  osisId       String
+  chapterStart Int       @default(-1)
+  chapterEnd   Int       @default(-1)
+  verseStart   Int       @default(-1)
+  verseEnd     Int       @default(-1)
+  videoId      String
+  order        Int
+  BibleBook    BibleBook @relation(fields: [bibleBookId], references: [id])
+  Video        Video     @relation(fields: [videoId], references: [id])
+
+  @@unique([videoId, bibleBookId, chapterStart, chapterEnd, verseStart, verseEnd])
+  @@index([order])
+}
+
+model CloudflareImage {
+  id                  String            @id
+  uploadUrl           String?
+  userId              String
+  createdAt           DateTime          @default(now())
+  uploaded            Boolean           @default(false)
+  updatedAt           DateTime          @default(now())
+  aspectRatio         ImageAspectRatio?
+  videoId             String?
+  blurhash            String?
+  blurhashAttemptedAt DateTime?
+  Video               Video?            @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([blurhashAttemptedAt])
+  @@index([userId])
+}
+
+model CloudflareR2 {
+  id                                                   String                 @id
+  fileName                                             String
+  originalFilename                                     String?
+  uploadUrl                                            String?
+  userId                                               String
+  publicUrl                                            String?
+  videoId                                              String?
+  contentType                                          String                 @default("application/octet-stream")
+  contentLength                                        BigInt                 @default(0)
+  createdAt                                            DateTime               @default(now())
+  updatedAt                                            DateTime               @default(now())
+  Video                                                Video?                 @relation(fields: [videoId], references: [id])
+  VideoSubtitle_VideoSubtitle_srtAssetIdToCloudflareR2 VideoSubtitle?         @relation("VideoSubtitle_srtAssetIdToCloudflareR2")
+  VideoSubtitle_VideoSubtitle_vttAssetIdToCloudflareR2 VideoSubtitle?         @relation("VideoSubtitle_vttAssetIdToCloudflareR2")
+  VideoVariant                                         VideoVariant?
+  VideoVariantDownload                                 VideoVariantDownload[]
+
+  @@index([userId])
+  @@index([videoId])
+}
+
+model ImportTimes {
+  modelName  String   @id
+  lastImport DateTime
+}
+
+model Keyword {
+  id         String  @id
+  value      String
+  languageId String
+  Video      Video[] @relation("VideoToKeyword")
+
+  @@unique([value, languageId])
+  @@index([value])
+}
+
+model MuxSubtitleTrack {
+  id         String                 @id
+  trackId    String                 @unique
+  source     MuxSubtitleTrackSource
+  status     MuxSubtitleTrackStatus
+  bcp47      String
+  muxVideoId String
+  MuxVideo   MuxVideo               @relation(fields: [muxVideoId], references: [id], onDelete: Cascade)
+
+  @@index([trackId])
+}
+
+model MuxVideo {
+  id               String             @id
+  playbackId       String?            @unique
+  uploadUrl        String?
+  uploadId         String?            @unique
+  assetId          String?            @unique
+  userId           String
+  name             String?
+  duration         Int                @default(0)
+  downloadable     Boolean            @default(false)
+  createdAt        DateTime           @default(now())
+  readyToStream    Boolean            @default(false)
+  updatedAt        DateTime           @default(now())
+  MuxSubtitleTrack MuxSubtitleTrack[]
+  VideoVariant     VideoVariant[]
+
+  @@index([assetId])
+  @@index([userId])
+}
+
+model Playlist {
+  id            String         @id
+  name          String
+  note          String?
+  noteUpdatedAt DateTime?
+  noteSharedAt  DateTime?
+  sharedAt      DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime
+  ownerId       String
+  slug          String         @unique
+  PlaylistItem  PlaylistItem[]
+
+  @@index([ownerId])
+  @@index([slug])
+}
+
+model PlaylistItem {
+  id             String       @id
+  order          Int?
+  createdAt      DateTime     @default(now())
+  videoVariantId String
+  playlistId     String
+  updatedAt      DateTime
+  Playlist       Playlist     @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  VideoVariant   VideoVariant @relation(fields: [videoVariantId], references: [id], onDelete: Cascade)
+
+  @@unique([playlistId, order])
+  @@index([order])
+  @@index([playlistId])
+  @@index([videoVariantId])
+}
+
+model ShortLink {
+  id              String             @id
+  pathname        String
+  to              String
+  domainId        String
+  userId          String?
+  service         Service
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime
+  brightcoveId    String?
+  redirectType    VideoRedirectType?
+  bitrate         Int?
+  ShortLinkDomain ShortLinkDomain    @relation(fields: [domainId], references: [id])
+
+  @@unique([pathname, domainId])
+}
+
+model ShortLinkBlocklistDomain {
+  hostname String @id
+}
+
+model ShortLinkDomain {
+  id        String      @id
+  hostname  String      @unique
+  apexName  String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime
+  services  Service[]
+  ShortLink ShortLink[]
+}
+
+model Tag {
+  id        String    @id
+  createdAt DateTime  @default(now())
+  updatedAt DateTime
+  name      String    @unique
+  parentId  String?
+  service   Service?
+  Tag       Tag?      @relation("TagToTag", fields: [parentId], references: [id], onDelete: Cascade)
+  other_Tag Tag[]     @relation("TagToTag")
+  TagName   TagName[]
+  Tagging   Tagging[]
+}
+
+model TagName {
+  id         String   @id
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime
+  value      String
+  languageId String
+  primary    Boolean
+  tagId      String
+  Tag        Tag      @relation(fields: [tagId], references: [id])
+
+  @@unique([tagId, languageId])
+  @@index([languageId])
+  @@index([primary])
+  @@index([value])
+}
+
+model Tagging {
+  id           String   @id
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+  tagId        String
+  taggableType String
+  taggableId   String
+  context      String
+  Tag          Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([taggableId, taggableType, tagId, context])
+  @@index([tagId])
+}
+
+model Taxonomy {
+  id           String         @id
+  category     String
+  term         String         @unique
+  TaxonomyName TaxonomyName[]
+}
+
+model TaxonomyName {
+  id           String   @id
+  term         String
+  label        String
+  languageId   String
+  languageCode String
+  Taxonomy     Taxonomy @relation(fields: [term], references: [term])
+
+  @@unique([term, languageId])
+  @@index([languageCode])
+  @@index([languageId])
+  @@index([term])
+}
+
+model UserMediaRole {
+  id     String      @id
+  userId String      @unique
+  roles  MediaRole[]
+}
+
+model Video {
+  id                        String               @id
+  label                     VideoLabel
+  primaryLanguageId         String
+  published                 Boolean              @default(true)
+  slug                      String?              @unique
+  noIndex                   Boolean?
+  childIds                  String[]
+  locked                    Boolean              @default(false)
+  availableLanguages        String[]
+  originId                  String?
+  restrictDownloadPlatforms Platform[]           @default([])
+  restrictViewPlatforms     Platform[]           @default([])
+  publishedAt               DateTime?
+  BibleCitation             BibleCitation[]
+  CloudflareImage           CloudflareImage[]
+  CloudflareR2              CloudflareR2[]
+  VideoOrigin               VideoOrigin?         @relation(fields: [originId], references: [id])
+  VideoDescription          VideoDescription[]
+  VideoEdition              VideoEdition[]
+  VideoImageAlt             VideoImageAlt[]
+  VideoSnippet              VideoSnippet[]
+  VideoStudyQuestion        VideoStudyQuestion[]
+  VideoSubtitle             VideoSubtitle[]
+  VideoTitle                VideoTitle[]
+  VideoVariant              VideoVariant[]
+  Video_A                   Video[]              @relation("ParentChild")
+  Video_B                   Video[]              @relation("ParentChild")
+  Keyword                   Keyword[]            @relation("VideoToKeyword")
+
+  @@index([childIds])
+  @@index([label])
+  @@index([originId])
+  @@index([published])
+}
+
+model VideoDescription {
+  id         String  @id
+  value      String
+  languageId String
+  primary    Boolean
+  videoId    String
+  crowdInId  String?
+  Video      Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, languageId])
+  @@index([languageId])
+  @@index([primary])
+  @@index([value])
+}
+
+model VideoEdition {
+  id            String          @id
+  name          String
+  videoId       String
+  Video         Video           @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  VideoSubtitle VideoSubtitle[]
+  VideoVariant  VideoVariant[]
+
+  @@unique([name, videoId])
+}
+
+model VideoImageAlt {
+  id         String  @id
+  value      String
+  languageId String
+  primary    Boolean
+  videoId    String
+  Video      Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, languageId])
+  @@index([languageId])
+  @@index([primary])
+  @@index([value])
+}
+
+model VideoOrigin {
+  id          String  @id
+  name        String
+  description String?
+  Video       Video[]
+}
+
+model VideoSnippet {
+  id         String  @id
+  value      String
+  languageId String
+  primary    Boolean
+  videoId    String
+  Video      Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, languageId])
+  @@index([languageId])
+  @@index([primary])
+  @@index([value])
+}
+
+model VideoStudyQuestion {
+  id         String  @id
+  value      String
+  languageId String
+  order      Int
+  primary    Boolean
+  crowdInId  String?
+  videoId    String
+  Video      Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, languageId, order])
+  @@index([languageId])
+  @@index([order])
+  @@index([primary])
+  @@index([value])
+}
+
+model VideoSubtitle {
+  id                                                  String        @id
+  videoId                                             String
+  edition                                             String        @default("base")
+  vttAssetId                                          String?       @unique
+  vttSrc                                              String?
+  vttVersion                                          Int           @default(1)
+  srtAssetId                                          String?       @unique
+  srtSrc                                              String?
+  srtVersion                                          Int           @default(1)
+  primary                                             Boolean
+  languageId                                          String
+  VideoEdition                                        VideoEdition  @relation(fields: [edition, videoId], references: [name, videoId])
+  CloudflareR2_VideoSubtitle_srtAssetIdToCloudflareR2 CloudflareR2? @relation("VideoSubtitle_srtAssetIdToCloudflareR2", fields: [srtAssetId], references: [id])
+  Video                                               Video         @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  CloudflareR2_VideoSubtitle_vttAssetIdToCloudflareR2 CloudflareR2? @relation("VideoSubtitle_vttAssetIdToCloudflareR2", fields: [vttAssetId], references: [id])
+
+  @@unique([videoId, edition, languageId])
+  @@index([edition])
+  @@index([languageId])
+  @@index([primary])
+  @@index([videoId])
+}
+
+model VideoTitle {
+  id         String  @id
+  value      String
+  languageId String
+  primary    Boolean
+  videoId    String
+  crowdInId  String?
+  Video      Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, languageId])
+  @@index([languageId])
+  @@index([primary])
+  @@index([value])
+}
+
+model VideoVariant {
+  id                   String                 @id
+  hls                  String?
+  dash                 String?
+  share                String?
+  downloadable         Boolean                @default(true)
+  duration             Int?
+  lengthInMilliseconds Int?
+  languageId           String
+  masterUrl            String?
+  masterWidth          Int?
+  masterHeight         Int?
+  published            Boolean                @default(true)
+  version              Int                    @default(1)
+  edition              String                 @default("base")
+  slug                 String                 @unique
+  videoId              String
+  assetId              String?                @unique
+  muxVideoId           String?
+  brightcoveId         String?
+  PlaylistItem         PlaylistItem[]
+  CloudflareR2         CloudflareR2?          @relation(fields: [assetId], references: [id])
+  VideoEdition         VideoEdition           @relation(fields: [edition, videoId], references: [name, videoId])
+  MuxVideo             MuxVideo?              @relation(fields: [muxVideoId], references: [id])
+  Video                Video                  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  VideoVariantDownload VideoVariantDownload[]
+
+  @@unique([languageId, videoId])
+  @@index([languageId])
+  @@index([videoId])
+}
+
+model VideoVariantDownload {
+  id             String                      @id
+  quality        VideoVariantDownloadQuality
+  size           Float?
+  height         Int?
+  width          Int?
+  version        Int                         @default(1)
+  url            String
+  assetId        String?
+  videoVariantId String?
+  bitrate        Int?
+  CloudflareR2   CloudflareR2?               @relation(fields: [assetId], references: [id])
+  VideoVariant   VideoVariant?               @relation(fields: [videoVariantId], references: [id], onDelete: Cascade)
+
+  @@unique([quality, videoVariantId])
+  @@index([videoVariantId])
+}
+
+enum DefaultPlatform {
+  ios
+  android
+  web
+}
+
+enum IdType {
+  databaseId
+  slug
+}
+
+enum ImageAspectRatio {
+  hd
+  banner
+}
+
+enum MediaRole {
+  publisher
+}
+
+enum MuxSubtitleTrackSource {
+  uploaded
+  generated
+}
+
+enum MuxSubtitleTrackStatus {
+  processing
+  ready
+  errored
+}
+
+enum Platform {
+  arclight
+  watch
+  journeys
+}
+
+enum Service {
+  apiJourneys
+  apiLanguages
+  apiMedia
+  apiTags
+  apiUsers
+  apiVideos
+}
+
+enum VideoLabel {
+  collection
+  episode
+  featureFilm
+  segment
+  series
+  shortFilm
+  trailer
+  behindTheScenes
+}
+
+enum VideoRedirectType {
+  hls
+  dl
+  dh
+  s
+}
+
+enum VideoVariantDownloadQuality {
+  low
+  high
+  sd
+  highest
+  distroLow
+  distroSd
+  distroHigh
+  fhd
+  qhd
+  uhd
+}

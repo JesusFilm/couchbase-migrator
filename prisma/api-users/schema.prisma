@@ -1,0 +1,21 @@
+generator apiUsersClient {
+  provider = "prisma-client-js"
+  output   = "../../src/lib/prisma/api-users/__generated__"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("PRISMA_API_USERS_URL")
+}
+
+model User {
+  id            String   @id
+  userId        String   @unique
+  firstName     String
+  lastName      String?
+  email         String   @unique
+  imageUrl      String?
+  createdAt     DateTime @default(now())
+  superAdmin    Boolean  @default(false)
+  emailVerified Boolean  @default(true)
+}

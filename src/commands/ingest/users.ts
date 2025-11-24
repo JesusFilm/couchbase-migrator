@@ -7,7 +7,11 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { z } from 'zod'
-import { prisma, Prisma, User } from '../../lib/prisma.js'
+import {
+  prismaApiUsers,
+  Prisma,
+  User,
+} from '../../lib/prisma/api-users/client.js'
 
 // Zod schemas for user data validation
 const SyncDataSchema = z.object({
@@ -146,7 +150,7 @@ async function processUserFile(
         ingestedAt: new Date(),
       }
 
-      const savedUser = await prisma.user.upsert({
+      const savedUser = await prismaApiUsers.user.upsert({
         where: { id: userData.owner },
         update: user,
         create: user,
