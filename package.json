@@ -15,7 +15,12 @@
     "format": "prettier --write src/**/*.ts",
     "format:check": "prettier --check src/**/*.ts",
     "prepare": "husky",
-    "commitlint": "commitlint --edit"
+    "commitlint": "commitlint --edit",
+    "prisma:generate": "dotenv -e .env -- prisma generate",
+    "prisma:dev": "dotenv -e .env -- prisma db push --accept-data-loss",
+    "prisma:studio": "dotenv -e .env -- prisma studio",
+    "prisma:migrate": "dotenv -e .env -- prisma migrate dev",
+    "prisma:reset": "dotenv -e .env -- prisma migrate reset"
   },
   "keywords": [],
   "author": "",
@@ -28,6 +33,7 @@
     "@types/node": "^24.3.1",
     "@typescript-eslint/eslint-plugin": "^8.15.0",
     "@typescript-eslint/parser": "^8.15.0",
+    "dotenv-cli": "^10.0.0",
     "eslint": "^9.15.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-prettier": "^5.2.1",
