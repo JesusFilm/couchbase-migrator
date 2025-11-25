@@ -21,6 +21,10 @@ export const env = createEnv({
 
     // SSL Configuration
     COUCHBASE_TRUST_STORE_PATH: z.string().optional(),
+
+    // Prisma Database URLs
+    PRISMA_API_USERS_URL: z.string(),
+    PRISMA_API_MEDIA_URL: z.string(),
   },
   runtimeEnv: {
     COUCHBASE_CONNECTION_STRING: process.env['COUCHBASE_CONNECTION_STRING'],
@@ -30,6 +34,8 @@ export const env = createEnv({
     COUCHBASE_CONNECTION_TIMEOUT: process.env['COUCHBASE_CONNECTION_TIMEOUT'],
     COUCHBASE_OPERATION_TIMEOUT: process.env['COUCHBASE_OPERATION_TIMEOUT'],
     COUCHBASE_TRUST_STORE_PATH: process.env['COUCHBASE_TRUST_STORE_PATH'],
+    PRISMA_API_USERS_URL: process.env['PRISMA_API_USERS_URL'],
+    PRISMA_API_MEDIA_URL: process.env['PRISMA_API_MEDIA_URL'],
   },
   skipValidation: !!process.env['SKIP_ENV_VALIDATION'],
 })
