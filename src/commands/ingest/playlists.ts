@@ -7,6 +7,11 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { z } from 'zod'
+import { prismaUsers } from '../../lib/prisma/users/client'
+import {
+  prismaApiMedia,
+  Prisma as PrismaApiMedia,
+} from '../../lib/prisma/api-media/client'
 
 // Zod schemas for playlist data validation
 const PlaylistItemSchema = z.object({
@@ -64,6 +69,28 @@ type ProcessedPlaylist = {
   cas: number
 }
 
+async function generateUniqueSlug(): Promise<string> {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  const maxAttempts = 10
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let result = ''
+    for (let i = 0; i < 6; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length))
+    }
+
+    const existing = await prismaApiMedia.playlist.findUnique({
+      where: { slug: result },
+    })
+
+    if (!existing) {
+      return result
+    }
+  }
+
+  throw new Error('Unable to generate unique slug after 10 attempts')
+}
+
 /**
  * Validate and transform playlist document data using Zod
  * @param rawData Raw JSON data from file
@@ -116,7 +143,8 @@ function validateAndTransformPlaylist(
  * @returns Processed playlist data or null if processing failed
  */
 async function processPlaylistFile(
-  filePath: string
+  filePath: string,
+  dryRun: boolean
 ): Promise<ProcessedPlaylist | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
@@ -127,6 +155,41 @@ async function processPlaylistFile(
       console.log(
         `⏭️ Skipping invalid playlist file: ${path.basename(filePath)}`
       )
+      return null
+    }
+    if (dryRun) {
+      console.log(`⏭️ Skipping playlist ${processedPlaylist.name} in dry run`)
+      return processedPlaylist
+    }
+    try {
+      const relatedUser = await prismaUsers.user.findUnique({
+        where: {
+          ownerId: processedPlaylist.owner,
+        },
+      })
+      if (!relatedUser) {
+        console.error(
+          `❌ User not found for playlist ${processedPlaylist.name}`
+        )
+        throw new Error(`User not found for playlist ${processedPlaylist.name}`)
+      }
+      const playListToSave: PrismaApiMedia.PlaylistCreateInput = {
+        id: processedPlaylist.id,
+        name: processedPlaylist.name,
+        note: processedPlaylist.note,
+        noteUpdatedAt: processedPlaylist.noteModifiedAt,
+        ownerId: relatedUser.coreId,
+        createdAt: processedPlaylist.createdAt,
+        updatedAt: processedPlaylist.updatedAt,
+        slug: await generateUniqueSlug(),
+      }
+      await prismaApiMedia.playlist.upsert({
+        where: { id: processedPlaylist.id },
+        update: playListToSave,
+        create: playListToSave,
+      })
+    } catch (error) {
+      console.error(`❌ Error saving playlist to local database:`, error)
       return null
     }
 
@@ -229,7 +292,7 @@ export async function ingestPlaylists(
   let errorCount = 0
 
   for (const filePath of playlistFiles) {
-    const processedPlaylist = await processPlaylistFile(filePath)
+    const processedPlaylist = await processPlaylistFile(filePath, dryRun)
     if (processedPlaylist) {
       processedPlaylists.push(processedPlaylist)
       successCount++
