@@ -254,8 +254,7 @@ coverage/
 .couchbase/
 
 #prisma generated files
-src/lib/prisma/api-users/__generated__/
-src/lib/prisma/api-media/__generated__/
+src/lib/prisma/*/__generated__/
 
 
 /src/__generated__/prisma
