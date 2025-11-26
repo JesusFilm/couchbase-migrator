@@ -7,11 +7,14 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { z } from 'zod'
+import admin from 'firebase-admin'
 import {
   prismaApiUsers,
   Prisma,
   User,
 } from '../../lib/prisma/api-users/client.js'
+import { v4 as uuidv4 } from 'uuid'
+import { auth } from '../../lib/firebase.js'
 
 // Zod schemas for user data validation
 const SyncDataSchema = z.object({
@@ -126,28 +129,91 @@ async function processUserFile(
       console.log(`⏭️ Skipping user ${userData.theKeySsoGuid} in dry run`)
       return null
     }
+    // Check if user exists by email in Firebase
+    let firebaseUser: admin.auth.UserRecord | null = null
+    try {
+      try {
+        firebaseUser = await auth.getUserByEmail(userData.email)
+        console.log(
+          `ℹ️ User with email ${userData.email} already exists in Firebase (UID: ${firebaseUser.uid})`
+        )
+        const oktaProvider = firebaseUser.providerData.find(
+          provider => provider.providerId === 'oidc.okta'
+        )
+        if (!oktaProvider) {
+          firebaseUser = await auth.updateUser(firebaseUser.uid, {
+            providerToLink: {
+              providerId: 'oidc.okta',
+              uid: userData.theKeySsoGuid,
+              displayName: `${userData.nameFirst} ${userData.nameLast}`.trim(),
+              email: userData.email,
+            },
+          })
+          console.log(
+            `✅ Updated Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
+          )
+        } else {
+          console.log(`✅ User ${userData.email} already has Okta provider`)
+        }
+      } catch (error: unknown) {
+        // User doesn't exist if error code is 'auth/user-not-found'
+        const firebaseError = error as { code?: string }
+        if (firebaseError.code === 'auth/user-not-found') {
+          try {
+            firebaseUser = await auth.createUser({
+              email: userData.email,
+              emailVerified: true,
+              displayName: `${userData.nameFirst} ${userData.nameLast}`.trim(),
+              disabled: false,
+            })
+            //  link Okta provider
+            firebaseUser = await auth.updateUser(firebaseUser.uid, {
+              providerToLink: {
+                providerId: 'oidc.okta',
+                uid: userData.theKeySsoGuid,
+                displayName:
+                  `${userData.nameFirst} ${userData.nameLast}`.trim(),
+                email: userData.email,
+              },
+            })
+            console.log(
+              `✅ Created Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
+            )
+          } catch (error) {
+            console.error(
+              `❌ Error creating Firebase user for ${userData.email}:`,
+              error
+            )
+            return null
+          }
+        } else {
+          // Some other error occurred
+          throw error
+        }
+      }
+    } catch (error) {
+      console.error(
+        `❌ Error uploading user to firebase for user file ${filePath}:`,
+        error
+      )
+      return null
+    }
 
     // Save to database using Prisma
     try {
+      if (!firebaseUser || !firebaseUser.email) {
+        console.error(`❌ Firebase user not found for user ${userData.email}`)
+        return null
+      }
+
       const user: Prisma.UserCreateInput = {
-        id: userData.owner,
-        theKeySsoGuid: userData.theKeySsoGuid,
-        theKeyGuid: userData.theKeyGuid,
-        theKeyRelayGuid: userData.theKeyRelayGuid,
-        theKeyGrPersonId: userData.theKeyGrPersonId || null,
-        email: userData.email,
-        nameFirst: userData.nameFirst,
-        nameLast: userData.nameLast,
-        homeCountry: userData.homeCountry || null,
-        notificationCountries: userData.notificationCountries.join(','),
-        createdAt: new Date(userData.createdAt),
-        updatedAt: new Date(userData.updatedAt),
-        cas: BigInt(userData.cas),
-        syncRev: userData._sync.rev,
-        syncSequence: userData._sync.sequence,
-        syncRecentSequences: userData._sync.recent_sequences.join(','),
-        syncTimeSaved: userData._sync.time_saved,
-        ingestedAt: new Date(),
+        id: uuidv4(),
+        userId: firebaseUser.uid,
+        firstName: firebaseUser.displayName?.split(' ')[0] ?? '',
+        lastName: firebaseUser.displayName?.split(' ')[1] ?? '',
+        email: firebaseUser.email,
+        emailVerified: firebaseUser.emailVerified,
+        superAdmin: false,
       }
 
       const savedUser = await prismaApiUsers.user.upsert({
@@ -156,8 +222,7 @@ async function processUserFile(
         create: user,
       })
 
-      console.log(`✅ Saved user ${userData.owner}`)
-
+      console.log(`✅ Saved user ${firebaseUser.email} to database`)
       return savedUser
     } catch (dbError) {
       console.error(`❌ Database error for user ${userData.owner}:`, dbError)
@@ -218,7 +283,7 @@ export async function ingestUsers(
   console.log(`📊 Found ${userFiles.length} user files to process`)
 
   // Process each user file
-  const processedUsers: any[] = []
+  const processedUsers: User[] = []
   let successCount = 0
   let errorCount = 0
 
@@ -242,10 +307,9 @@ export async function ingestUsers(
     console.log('\n🔍 Dry run - showing sample processed users:')
     processedUsers.slice(0, 3).forEach((user, index) => {
       console.log(`\nUser ${index + 1}:`)
-      console.log(`  Name: ${user.nameFirst} ${user.nameLast}`)
+      console.log(`  Name: ${user.firstName} ${user.lastName ?? ''}`)
       console.log(`  Email: ${user.email}`)
-      console.log(`  Country: ${user.homeCountry}`)
-      console.log(`  SSO GUID: ${user.theKeySsoGuid}`)
+      console.log(`  User ID: ${user.userId}`)
     })
   }
 }
