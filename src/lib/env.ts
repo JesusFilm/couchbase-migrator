@@ -25,9 +25,12 @@ export const env = createEnv({
     // Prisma Database URLs
     PRISMA_API_USERS_URL: z.string(),
     PRISMA_API_MEDIA_URL: z.string(),
+    PRISMA_USERS_URL: z.string().optional(),
 
     // Firebase Admin Configuration
     GOOGLE_APPLICATION_JSON: z.string().optional(),
+
+
   },
   runtimeEnv: {
     COUCHBASE_CONNECTION_STRING: process.env['COUCHBASE_CONNECTION_STRING'],
@@ -39,7 +42,9 @@ export const env = createEnv({
     COUCHBASE_TRUST_STORE_PATH: process.env['COUCHBASE_TRUST_STORE_PATH'],
     PRISMA_API_USERS_URL: process.env['PRISMA_API_USERS_URL'],
     PRISMA_API_MEDIA_URL: process.env['PRISMA_API_MEDIA_URL'],
+    PRISMA_USERS_URL: process.env['PRISMA_USERS_URL'],
     GOOGLE_APPLICATION_JSON: process.env['GOOGLE_APPLICATION_JSON'],
+
   },
   skipValidation: !!process.env['SKIP_ENV_VALIDATION'],
 })
