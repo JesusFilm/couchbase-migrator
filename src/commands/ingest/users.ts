@@ -13,6 +13,7 @@ import {
   Prisma,
   User,
 } from '../../lib/prisma/api-users/client.js'
+import { prismaUsers } from '../../lib/prisma/users/client.js'
 import { v4 as uuidv4 } from 'uuid'
 import { auth } from '../../lib/firebase.js'
 
@@ -216,14 +217,26 @@ async function processUserFile(
         superAdmin: false,
       }
 
-      const savedUser = await prismaApiUsers.user.upsert({
+      const userSavedToCore = await prismaApiUsers.user.upsert({
         where: { id: userData.owner },
         update: user,
         create: user,
       })
 
       console.log(`✅ Saved user ${firebaseUser.email} to database`)
-      return savedUser
+      const userToSaveToLocal = {
+        ownerId: userData.owner,
+        email: firebaseUser.email,
+        ssoGuid: userData.theKeySsoGuid,
+        coreId: userSavedToCore.id,
+      }
+      await prismaUsers.user.upsert({
+        where: { email: firebaseUser.email },
+        update: userToSaveToLocal,
+        create: userToSaveToLocal,
+      })
+      console.log(`✅ Saved user ${firebaseUser.email} to local database`)
+      return userSavedToCore
     } catch (dbError) {
       console.error(`❌ Database error for user ${userData.owner}:`, dbError)
       return null
