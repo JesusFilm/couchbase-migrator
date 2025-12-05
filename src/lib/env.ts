@@ -29,7 +29,6 @@ export const env = createEnv({
 
     // Firebase Admin Configuration
     GOOGLE_APPLICATION_JSON: z.string().optional(),
-    OKTA_PROVIDER_ID: z.string(),
   },
   runtimeEnv: {
     COUCHBASE_CONNECTION_STRING: process.env['COUCHBASE_CONNECTION_STRING'],
@@ -43,7 +42,6 @@ export const env = createEnv({
     PRISMA_API_MEDIA_URL: process.env['PRISMA_API_MEDIA_URL'],
     PRISMA_USERS_URL: process.env['PRISMA_USERS_URL'],
     GOOGLE_APPLICATION_JSON: process.env['GOOGLE_APPLICATION_JSON'],
-    OKTA_PROVIDER_ID: process.env['OKTA_PROVIDER_ID'],
   },
   skipValidation: !!process.env['SKIP_ENV_VALIDATION'],
 })
