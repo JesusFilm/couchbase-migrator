@@ -217,25 +217,59 @@ async function processUserFile(
         superAdmin: false,
       }
 
-      const userSavedToCore = await prismaApiUsers.user.upsert({
-        where: { id: userData.owner },
-        update: user,
-        create: user,
+      // Check if user already exists
+      const existingUser = await prismaApiUsers.user.findUnique({
+        where: { userId: firebaseUser.uid },
       })
 
-      console.log(`✅ Saved user ${firebaseUser.email} to database`)
-      const userToSaveToLocal = {
-        ownerId: userData.owner,
-        email: firebaseUser.email,
-        ssoGuid: userData.theKeySsoGuid,
-        coreId: userSavedToCore.id,
+      let userSavedToCore: User
+
+      if (existingUser) {
+        // User exists - check if Firebase ID matches
+        if (existingUser.userId === firebaseUser.uid) {
+          // Firebase ID matches, skip
+          console.log(
+            `ℹ️ User ${firebaseUser.email} already exists in database`
+          )
+          userSavedToCore = existingUser
+        } else {
+          // Firebase ID mismatched, update
+          userSavedToCore = await prismaApiUsers.user.update({
+            where: { id: userData.owner },
+            data: user,
+          })
+          console.log(
+            `✅ Updated user ${firebaseUser.email} in database (Firebase ID was mismatched)`
+          )
+        }
+      } else {
+        // User doesn't exist, create
+        userSavedToCore = await prismaApiUsers.user.create({
+          data: user,
+        })
+        console.log(`✅ Created user ${firebaseUser.email} in database`)
       }
-      await prismaUsers.user.upsert({
+      // Check if user already exists in local database
+      const existingLocalUser = await prismaUsers.user.findUnique({
         where: { email: firebaseUser.email },
-        update: userToSaveToLocal,
-        create: userToSaveToLocal,
       })
-      console.log(`✅ Saved user ${firebaseUser.email} to local database`)
+
+      if (existingLocalUser) {
+        console.log(
+          `ℹ️ User ${firebaseUser.email} already exists in local database`
+        )
+      } else {
+        const userToSaveToLocal = {
+          ownerId: userData.owner,
+          email: firebaseUser.email,
+          ssoGuid: userData.theKeySsoGuid,
+          coreId: userSavedToCore.id,
+        }
+        await prismaUsers.user.create({
+          data: userToSaveToLocal,
+        })
+        console.log(`✅ Saved user ${firebaseUser.email} to local database`)
+      }
       return userSavedToCore
     } catch (dbError) {
       console.error(`❌ Database error for user ${userData.owner}:`, dbError)
