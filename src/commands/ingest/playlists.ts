@@ -7,6 +7,7 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { z } from 'zod'
+import { v4 as uuidv4 } from 'uuid'
 import { prismaUsers } from '../../lib/prisma/users/client'
 import {
   prismaApiMedia,
@@ -37,15 +38,15 @@ const SyncDataSchema = z.object({
 
 const PlaylistProfileSchema = z.object({
   _sync: SyncDataSchema,
-  createdAt: z.string().optional(),
-  note: z.string().optional().default(''),
-  noteModifiedAt: z.string().optional(),
+  createdAt: z.string().nullish(),
+  note: z.string().nullish().default(''),
+  noteModifiedAt: z.string().nullish(),
   owner: z.string(),
-  playlistByDisplayName: z.string().optional(),
-  playlistItems: z.array(PlaylistItemSchema).optional().default([]),
-  playlistName: z.string(),
+  playlistByDisplayName: z.string().nullish(),
+  playlistItems: z.array(PlaylistItemSchema).nullish().default([]),
+  playlistName: z.string().nullish(),
   type: z.literal('playlist'),
-  updatedAt: z.string().optional(),
+  updatedAt: z.string().nullish(),
 })
 
 const PlaylistDocumentSchema = z.object({
@@ -54,7 +55,14 @@ const PlaylistDocumentSchema = z.object({
 })
 
 // Inferred types from Zod schemas
-type PlaylistItem = z.infer<typeof PlaylistItemSchema>
+type ProcessedPlaylistItem = {
+  order: number
+  createdAt: Date
+  updatedAt: Date
+  mediaComponentId: string // Used to look up VideoVariant by slug
+  languageId: number
+  type?: string | undefined
+}
 type ProcessedPlaylist = {
   id: string
   name: string
@@ -62,7 +70,7 @@ type ProcessedPlaylist = {
   note: string
   noteModifiedAt: Date
   owner: string
-  items: PlaylistItem[]
+  items: ProcessedPlaylistItem[]
   itemCount: number
   createdAt: Date
   updatedAt: Date
@@ -113,20 +121,39 @@ function validateAndTransformPlaylist(
 
     const playlistData = parseResult.data['JFM-profiles']
 
+    // Transform playlist items with order and proper date conversion
+    const rawItems = playlistData.playlistItems || []
+    const transformedItems: ProcessedPlaylistItem[] = rawItems.map(
+      (item, index) => {
+        const createdAt = new Date(item.createdAt || new Date().toISOString())
+        const transformedItem: ProcessedPlaylistItem = {
+          order: index,
+          createdAt,
+          updatedAt: createdAt, // Use createdAt as updatedAt if not available
+          mediaComponentId: item.mediaComponentId,
+          languageId: item.languageId,
+        }
+        if (item.type !== undefined) {
+          transformedItem.type = item.type
+        }
+        return transformedItem
+      }
+    )
+
     return {
       id: playlistData.owner, // Use owner as the playlist ID
-      name: playlistData.playlistName,
+      name: playlistData.playlistName ?? '',
       displayName:
-        playlistData.playlistByDisplayName || playlistData.playlistName,
-      note: playlistData.note || '',
+        playlistData.playlistByDisplayName ?? playlistData.playlistName ?? '',
+      note: playlistData.note ?? '',
       noteModifiedAt: new Date(
         playlistData.noteModifiedAt ||
           playlistData.createdAt ||
           new Date().toISOString()
       ),
       owner: playlistData.owner,
-      items: playlistData.playlistItems || [],
-      itemCount: (playlistData.playlistItems || []).length,
+      items: transformedItems,
+      itemCount: transformedItems.length,
       createdAt: new Date(playlistData.createdAt || new Date().toISOString()),
       updatedAt: new Date(playlistData.updatedAt || new Date().toISOString()),
       cas: parseResult.data.cas,
@@ -188,6 +215,71 @@ async function processPlaylistFile(
         update: playListToSave,
         create: playListToSave,
       })
+
+      // Save playlist items
+      if (processedPlaylist.items.length > 0) {
+        let savedItemsCount = 0
+        let skippedItemsCount = 0
+
+        for (const item of processedPlaylist.items) {
+          try {
+            // Check if playlist item already exists (by playlistId and order)
+            const existingItem = await prismaApiMedia.playlistItem.findFirst({
+              where: {
+                playlistId: processedPlaylist.id,
+                order: item.order,
+              },
+            })
+
+            if (existingItem) {
+              skippedItemsCount++
+              continue
+            }
+
+            // Look up VideoVariant by slug (mediaComponentId)
+            const videoVariant = await prismaApiMedia.videoVariant.findUnique({
+              where: { slug: item.mediaComponentId },
+            })
+
+            if (!videoVariant) {
+              console.warn(
+                `⚠️ VideoVariant not found for mediaComponentId: ${item.mediaComponentId} (playlist: ${processedPlaylist.name})`
+              )
+              skippedItemsCount++
+              continue
+            }
+
+            // Create playlist item
+            const playlistItemToSave: PrismaApiMedia.PlaylistItemCreateInput = {
+              id: uuidv4(),
+              order: item.order,
+              createdAt: item.createdAt,
+              updatedAt: item.updatedAt,
+              Playlist: {
+                connect: { id: processedPlaylist.id },
+              },
+              VideoVariant: {
+                connect: { id: videoVariant.id },
+              },
+            }
+
+            await prismaApiMedia.playlistItem.create({
+              data: playlistItemToSave,
+            })
+            savedItemsCount++
+          } catch (itemError) {
+            console.error(
+              `❌ Error saving playlist item for mediaComponentId ${item.mediaComponentId}:`,
+              itemError
+            )
+            skippedItemsCount++
+          }
+        }
+
+        console.log(
+          `  📝 Saved ${savedItemsCount} playlist items, skipped ${skippedItemsCount}`
+        )
+      }
     } catch (error) {
       console.error(`❌ Error saving playlist to local database:`, error)
       return null
@@ -255,13 +347,22 @@ function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
   }
 }
 
+export interface PlaylistIngestionSummary {
+  successCount: number
+  errorCount: number
+  totalFiles: number
+  analysis: ReturnType<typeof analyzePlaylistItems>
+  processedPlaylists: ProcessedPlaylist[]
+}
+
 /**
  * Ingest playlists from cache directory
  * @param options Options for playlist ingestion
+ * @returns Summary of playlist ingestion
  */
 export async function ingestPlaylists(
   options: { sourceDir?: string; dryRun?: boolean } = {}
-): Promise<void> {
+): Promise<PlaylistIngestionSummary | null> {
   const { sourceDir = './tmp', dryRun = false } = options
   const playlistDir = path.join(sourceDir, 'pl')
 
@@ -274,14 +375,14 @@ export async function ingestPlaylists(
     await fs.access(playlistDir)
   } catch {
     console.error(`❌ Playlist directory does not exist: ${playlistDir}`)
-    return
+    return null
   }
 
   // Get all playlist files
   const playlistFiles = await getPlaylistFiles(playlistDir)
   if (playlistFiles.length === 0) {
     console.log('ℹ️ No playlist files found in directory')
-    return
+    return null
   }
 
   console.log(`📊 Found ${playlistFiles.length} playlist files to process`)
@@ -304,31 +405,6 @@ export async function ingestPlaylists(
   // Analyze playlist data
   const analysis = analyzePlaylistItems(processedPlaylists)
 
-  // Summary
-  console.log('\n📈 Playlist Ingestion Summary:')
-  console.log(`✅ Successfully processed: ${successCount} playlists`)
-  console.log(`❌ Failed to process: ${errorCount} playlists`)
-  console.log(`📊 Total files: ${playlistFiles.length}`)
-  console.log(`🎵 Total playlist items: ${analysis.totalItems}`)
-  console.log(
-    `📺 Unique media components: ${analysis.uniqueMediaComponents.size}`
-  )
-  console.log(
-    `📊 Average items per playlist: ${analysis.averageItemsPerPlaylist.toFixed(2)}`
-  )
-
-  // Language distribution
-  if (analysis.languageDistribution.size > 0) {
-    console.log('\n🌍 Language Distribution:')
-    const sortedLanguages = Array.from(analysis.languageDistribution.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5) // Show top 5 languages
-
-    for (const [languageId, count] of sortedLanguages) {
-      console.log(`  Language ${languageId}: ${count} items`)
-    }
-  }
-
   if (dryRun) {
     console.log('\n🔍 Dry run - showing sample processed playlists:')
     processedPlaylists.slice(0, 3).forEach((playlist, index) => {
@@ -343,5 +419,13 @@ export async function ingestPlaylists(
     // TODO: Implement actual ingestion to Core system
     console.log('\n🚀 Ready to ingest playlists to Core system')
     console.log(`📊 ${processedPlaylists.length} playlists ready for ingestion`)
+  }
+
+  return {
+    successCount,
+    errorCount,
+    totalFiles: playlistFiles.length,
+    analysis,
+    processedPlaylists,
   }
 }

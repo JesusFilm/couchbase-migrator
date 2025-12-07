@@ -307,13 +307,21 @@ async function getUserFiles(sourceDir: string): Promise<string[]> {
   return allFiles
 }
 
+export interface UserIngestionSummary {
+  successCount: number
+  errorCount: number
+  totalFiles: number
+  processedUsers: User[]
+}
+
 /**
  * Ingest users from cache directory
  * @param options Options for user ingestion
+ * @returns Summary of user ingestion
  */
 export async function ingestUsers(
   options: { sourceDir?: string; dryRun?: boolean } = {}
-): Promise<void> {
+): Promise<UserIngestionSummary | null> {
   const { sourceDir = './tmp', dryRun = false } = options
 
   console.log('👥 Starting user ingestion pipeline...')
@@ -324,7 +332,7 @@ export async function ingestUsers(
   const userFiles = await getUserFiles(sourceDir)
   if (userFiles.length === 0) {
     console.log('ℹ️ No user files found in user/ or u/ directories')
-    return
+    return null
   }
 
   console.log(`📊 Found ${userFiles.length} user files to process`)
@@ -344,12 +352,6 @@ export async function ingestUsers(
     }
   }
 
-  // Summary
-  console.log('\n📈 User Ingestion Summary:')
-  console.log(`✅ Successfully processed: ${successCount} users`)
-  console.log(`❌ Failed to process: ${errorCount} users`)
-  console.log(`📊 Total files: ${userFiles.length}`)
-
   if (dryRun) {
     console.log('\n🔍 Dry run - showing sample processed users:')
     processedUsers.slice(0, 3).forEach((user, index) => {
@@ -358,5 +360,12 @@ export async function ingestUsers(
       console.log(`  Email: ${user.email}`)
       console.log(`  User ID: ${user.userId}`)
     })
+  }
+
+  return {
+    successCount,
+    errorCount,
+    totalFiles: userFiles.length,
+    processedUsers,
   }
 }
