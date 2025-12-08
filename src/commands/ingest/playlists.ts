@@ -72,6 +72,8 @@ type ProcessedPlaylist = {
   owner: string
   items: ProcessedPlaylistItem[]
   itemCount: number
+  savedItems: ProcessedPlaylistItem[]
+  skippedItems: ProcessedPlaylistItem[]
   createdAt: Date
   updatedAt: Date
   cas: number
@@ -154,6 +156,8 @@ function validateAndTransformPlaylist(
       owner: playlistData.owner,
       items: transformedItems,
       itemCount: transformedItems.length,
+      savedItems: [], // Will be populated during processing
+      skippedItems: [], // Will be populated during processing
       createdAt: new Date(playlistData.createdAt || new Date().toISOString()),
       updatedAt: new Date(playlistData.updatedAt || new Date().toISOString()),
       cas: parseResult.data.cas,
@@ -218,8 +222,8 @@ async function processPlaylistFile(
 
       // Save playlist items
       if (processedPlaylist.items.length > 0) {
-        let savedItemsCount = 0
-        let skippedItemsCount = 0
+        const savedItems: ProcessedPlaylistItem[] = []
+        const skippedItems: ProcessedPlaylistItem[] = []
 
         for (const item of processedPlaylist.items) {
           try {
@@ -232,7 +236,7 @@ async function processPlaylistFile(
             })
 
             if (existingItem) {
-              skippedItemsCount++
+              skippedItems.push(item)
               continue
             }
 
@@ -245,7 +249,7 @@ async function processPlaylistFile(
               console.warn(
                 `⚠️ VideoVariant not found for mediaComponentId: ${item.mediaComponentId} (playlist: ${processedPlaylist.name})`
               )
-              skippedItemsCount++
+              skippedItems.push(item)
               continue
             }
 
@@ -266,18 +270,22 @@ async function processPlaylistFile(
             await prismaApiMedia.playlistItem.create({
               data: playlistItemToSave,
             })
-            savedItemsCount++
+            savedItems.push(item)
           } catch (itemError) {
             console.error(
               `❌ Error saving playlist item for mediaComponentId ${item.mediaComponentId}:`,
               itemError
             )
-            skippedItemsCount++
+            skippedItems.push(item)
           }
         }
 
+        // Update processedPlaylist with saved and skipped items
+        processedPlaylist.savedItems = savedItems
+        processedPlaylist.skippedItems = skippedItems
+
         console.log(
-          `  📝 Saved ${savedItemsCount} playlist items, skipped ${skippedItemsCount}`
+          `  📝 Saved ${savedItems.length} playlist items, skipped ${skippedItems.length}`
         )
       }
     } catch (error) {
@@ -319,6 +327,8 @@ async function getPlaylistFiles(playlistDir: string): Promise<string[]> {
  */
 function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
   totalItems: number
+  totalSavedItems: number
+  totalSkippedItems: number
   uniqueMediaComponents: Set<string>
   languageDistribution: Map<number, number>
   averageItemsPerPlaylist: number
@@ -326,9 +336,13 @@ function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
   const uniqueMediaComponents = new Set<string>()
   const languageDistribution = new Map<number, number>()
   let totalItems = 0
+  let totalSavedItems = 0
+  let totalSkippedItems = 0
 
   for (const playlist of playlists) {
     totalItems += playlist.itemCount
+    totalSavedItems += playlist.savedItems.length
+    totalSkippedItems += playlist.skippedItems.length
 
     for (const item of playlist.items) {
       uniqueMediaComponents.add(item.mediaComponentId)
@@ -340,6 +354,8 @@ function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
 
   return {
     totalItems,
+    totalSavedItems,
+    totalSkippedItems,
     uniqueMediaComponents,
     languageDistribution,
     averageItemsPerPlaylist:
