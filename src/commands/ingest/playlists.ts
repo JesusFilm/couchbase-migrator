@@ -242,9 +242,13 @@ async function processPlaylistFile(
 
             // Look up VideoVariant by slug (mediaComponentId)
             const videoVariant = await prismaApiMedia.videoVariant.findUnique({
-              where: { slug: item.mediaComponentId },
+              where: {
+                languageId_videoId: {
+                  languageId: item.languageId.toString(),
+                  videoId: item.mediaComponentId,
+                },
+              },
             })
-
             if (!videoVariant) {
               console.warn(
                 `⚠️ VideoVariant not found for mediaComponentId: ${item.mediaComponentId} (playlist: ${processedPlaylist.name})`
