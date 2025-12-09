@@ -327,13 +327,30 @@ async function processPlaylistFile(
 /**
  * Get all playlist JSON files from the playlist directory
  * @param playlistDir Path to the playlist directory
+ * @param fileName Optional specific file name to filter by
  * @returns Array of file paths
  */
-async function getPlaylistFiles(playlistDir: string): Promise<string[]> {
+async function getPlaylistFiles(
+  playlistDir: string,
+  fileName?: string
+): Promise<string[]> {
   try {
+    // Normalize fileName - ensure it has .json extension if provided
+    const normalizedFileName = fileName
+      ? fileName.endsWith('.json')
+        ? fileName
+        : `${fileName}.json`
+      : undefined
+
     const files = await fs.readdir(playlistDir)
     return files
-      .filter(file => file.endsWith('.json'))
+      .filter(file => {
+        if (!file.endsWith('.json')) return false
+        if (normalizedFileName) {
+          return file === normalizedFileName
+        }
+        return true
+      })
       .map(file => path.join(playlistDir, file))
   } catch (error) {
     console.error(`❌ Error reading playlist directory ${playlistDir}:`, error)
@@ -398,14 +415,17 @@ export interface PlaylistIngestionSummary {
  * @returns Summary of playlist ingestion
  */
 export async function ingestPlaylists(
-  options: { sourceDir?: string; dryRun?: boolean } = {}
+  options: { sourceDir?: string; dryRun?: boolean; file?: string } = {}
 ): Promise<PlaylistIngestionSummary | null> {
-  const { sourceDir = './tmp', dryRun = false } = options
+  const { sourceDir = './tmp', dryRun = false, file } = options
   const playlistDir = path.join(sourceDir, 'pl')
 
   console.log('🎵 Starting playlist ingestion pipeline...')
   console.log(`📁 Source directory: ${playlistDir}`)
   console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  if (file) {
+    console.log(`📄 Processing single file: ${file}`)
+  }
 
   // Clear errors directory at the beginning
   await clearErrorsDirectory(sourceDir, 'playlists')
@@ -419,9 +439,13 @@ export async function ingestPlaylists(
   }
 
   // Get all playlist files
-  const playlistFiles = await getPlaylistFiles(playlistDir)
+  const playlistFiles = await getPlaylistFiles(playlistDir, file)
   if (playlistFiles.length === 0) {
-    console.log('ℹ️ No playlist files found in directory')
+    if (file) {
+      console.log(`ℹ️ File ${file} not found in playlist directory`)
+    } else {
+      console.log('ℹ️ No playlist files found in directory')
+    }
     return null
   }
 

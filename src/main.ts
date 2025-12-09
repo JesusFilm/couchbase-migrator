@@ -49,6 +49,10 @@ program
     'specify which pipeline to run: users, playlists, or all',
     'all'
   )
+  .option(
+    '--file <name>',
+    'specify a single file to ingest (only works with --pipeline users or --pipeline playlists)'
+  )
   .option('--dry-run', 'perform a dry run without actually ingesting data')
   .action(async options => {
     try {

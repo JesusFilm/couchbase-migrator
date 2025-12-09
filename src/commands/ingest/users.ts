@@ -304,18 +304,35 @@ async function processUserFile(
 /**
  * Get all user JSON files from both user directories
  * @param sourceDir Base source directory
+ * @param fileName Optional specific file name to filter by
  * @returns Array of file paths
  */
-async function getUserFiles(sourceDir: string): Promise<string[]> {
+async function getUserFiles(
+  sourceDir: string,
+  fileName?: string
+): Promise<string[]> {
   const userDirs = ['user', 'u']
   const allFiles: string[] = []
+
+  // Normalize fileName - ensure it has .json extension if provided
+  const normalizedFileName = fileName
+    ? fileName.endsWith('.json')
+      ? fileName
+      : `${fileName}.json`
+    : undefined
 
   for (const userDir of userDirs) {
     const fullPath = path.join(sourceDir, userDir)
     try {
       const files = await fs.readdir(fullPath)
       const jsonFiles = files
-        .filter(file => file.endsWith('.json'))
+        .filter(file => {
+          if (!file.endsWith('.json')) return false
+          if (normalizedFileName) {
+            return file === normalizedFileName
+          }
+          return true
+        })
         .map(file => path.join(fullPath, file))
       allFiles.push(...jsonFiles)
     } catch (error) {
@@ -340,21 +357,28 @@ export interface UserIngestionSummary {
  * @returns Summary of user ingestion
  */
 export async function ingestUsers(
-  options: { sourceDir?: string; dryRun?: boolean } = {}
+  options: { sourceDir?: string; dryRun?: boolean; file?: string } = {}
 ): Promise<UserIngestionSummary | null> {
-  const { sourceDir = './tmp', dryRun = false } = options
+  const { sourceDir = './tmp', dryRun = false, file } = options
 
   console.log('👥 Starting user ingestion pipeline...')
   console.log(`📁 Source directory: ${sourceDir}`)
   console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  if (file) {
+    console.log(`📄 Processing single file: ${file}`)
+  }
 
   // Clear errors directory at the beginning
   await clearErrorsDirectory(sourceDir, 'users')
 
   // Get all user files from both user and u directories
-  const userFiles = await getUserFiles(sourceDir)
+  const userFiles = await getUserFiles(sourceDir, file)
   if (userFiles.length === 0) {
-    console.log('ℹ️ No user files found in user/ or u/ directories')
+    if (file) {
+      console.log(`ℹ️ File ${file} not found in user/ or u/ directories`)
+    } else {
+      console.log('ℹ️ No user files found in user/ or u/ directories')
+    }
     return null
   }
 

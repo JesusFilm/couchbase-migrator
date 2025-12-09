@@ -14,6 +14,7 @@ export interface IngestOptions {
   sourceDir?: string
   dryRun?: boolean
   pipeline?: 'users' | 'playlists' | 'all'
+  file?: string
 }
 
 /**
@@ -34,14 +35,27 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
   try {
     switch (pipeline) {
       case 'users':
-        userSummary = await ingestUsers({ sourceDir, dryRun })
+        userSummary = await ingestUsers({
+          sourceDir,
+          dryRun,
+          ...(options.file && { file: options.file }),
+        })
         break
 
       case 'playlists':
-        playlistSummary = await ingestPlaylists({ sourceDir, dryRun })
+        playlistSummary = await ingestPlaylists({
+          sourceDir,
+          dryRun,
+          ...(options.file && { file: options.file }),
+        })
         break
 
       case 'all':
+        if (options.file) {
+          throw new Error(
+            '--file option can only be used with --pipeline users or --pipeline playlists, not --pipeline all'
+          )
+        }
         userSummary = await ingestUsers({ sourceDir, dryRun })
         playlistSummary = await ingestPlaylists({ sourceDir, dryRun })
         break
