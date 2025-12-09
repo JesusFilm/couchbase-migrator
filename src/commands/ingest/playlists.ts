@@ -107,7 +107,8 @@ async function generateUniqueSlug(): Promise<string> {
  * @returns Processed playlist data or null if invalid
  */
 function validateAndTransformPlaylist(
-  rawData: unknown
+  rawData: unknown,
+  fileID: string
 ): ProcessedPlaylist | null {
   try {
     // Parse and validate the raw data with Zod
@@ -143,7 +144,7 @@ function validateAndTransformPlaylist(
     )
 
     return {
-      id: playlistData.owner, // Use owner as the playlist ID
+      id: fileID,
       name: playlistData.playlistName ?? '',
       displayName:
         playlistData.playlistByDisplayName ?? playlistData.playlistName ?? '',
@@ -180,8 +181,9 @@ async function processPlaylistFile(
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
     const rawData = JSON.parse(fileContent)
+    const fileID = path.basename(filePath, '.json')
 
-    const processedPlaylist = validateAndTransformPlaylist(rawData)
+    const processedPlaylist = validateAndTransformPlaylist(rawData, fileID)
     if (!processedPlaylist) {
       console.log(
         `⏭️ Skipping invalid playlist file: ${path.basename(filePath)}`
