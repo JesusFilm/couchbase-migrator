@@ -16,6 +16,10 @@ import {
 import { prismaUsers } from '../../lib/prisma/users/client.js'
 import { v4 as uuidv4 } from 'uuid'
 import { auth } from '../../lib/firebase.js'
+import {
+  writeErrorToFile,
+  clearErrorsDirectory,
+} from '../../lib/error-handler.js'
 
 // Zod schemas for user data validation
 const SyncDataSchema = z.object({
@@ -68,7 +72,11 @@ const SKIP_CAS: number[] = [
  * @param rawData Raw JSON data from file
  * @returns Processed user data for Prisma or null if invalid
  */
-function validateAndTransformUser(rawData: unknown): UserProfile | null {
+function validateAndTransformUser(
+  rawData: unknown,
+  sourceDir: string,
+  filePath: string
+): UserProfile | null {
   try {
     // Check if user should be skipped based on cas BEFORE parsing
     let cas: number | undefined
@@ -94,6 +102,7 @@ function validateAndTransformUser(rawData: unknown): UserProfile | null {
         parseResult.error.issues,
         cas
       )
+      writeErrorToFile(sourceDir, 'users', filePath, parseResult.error)
       return null
     }
 
@@ -110,17 +119,20 @@ function validateAndTransformUser(rawData: unknown): UserProfile | null {
 /**
  * Process a single user JSON file
  * @param filePath Path to the user JSON file
+ * @param sourceDir Base source directory for error files
+ * @param dryRun Whether this is a dry run
  * @returns Processed user data or null if processing failed
  */
 async function processUserFile(
   filePath: string,
+  sourceDir: string,
   dryRun: boolean
 ): Promise<User | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
     const rawData = JSON.parse(fileContent)
 
-    const userData = validateAndTransformUser(rawData)
+    const userData = validateAndTransformUser(rawData, sourceDir, filePath)
     if (!userData) {
       console.log(`⏭️ Skipping invalid user file: ${filePath}`)
       return null
@@ -185,6 +197,7 @@ async function processUserFile(
               `❌ Error creating Firebase user for ${userData.email}:`,
               error
             )
+            await writeErrorToFile(sourceDir, 'users', filePath, error)
             return null
           }
         } else {
@@ -197,13 +210,18 @@ async function processUserFile(
         `❌ Error uploading user to firebase for user file ${filePath}:`,
         error
       )
+      await writeErrorToFile(sourceDir, 'users', filePath, error)
       return null
     }
 
     // Save to database using Prisma
     try {
       if (!firebaseUser || !firebaseUser.email) {
-        console.error(`❌ Firebase user not found for user ${userData.email}`)
+        const error = new Error(
+          `Firebase user not found for user ${userData.email}`
+        )
+        console.error(`❌ ${error.message}`)
+        await writeErrorToFile(sourceDir, 'users', filePath, error)
         return null
       }
 
@@ -273,10 +291,12 @@ async function processUserFile(
       return userSavedToCore
     } catch (dbError) {
       console.error(`❌ Database error for user ${userData.owner}:`, dbError)
+      await writeErrorToFile(sourceDir, 'users', filePath, dbError)
       return null
     }
   } catch (error) {
     console.error(`❌ Error processing user file ${filePath}:`, error)
+    await writeErrorToFile(sourceDir, 'users', filePath, error)
     return null
   }
 }
@@ -328,6 +348,9 @@ export async function ingestUsers(
   console.log(`📁 Source directory: ${sourceDir}`)
   console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
 
+  // Clear errors directory at the beginning
+  await clearErrorsDirectory(sourceDir, 'users')
+
   // Get all user files from both user and u directories
   const userFiles = await getUserFiles(sourceDir)
   if (userFiles.length === 0) {
@@ -343,7 +366,7 @@ export async function ingestUsers(
   let errorCount = 0
 
   for (const filePath of userFiles) {
-    const processedUser = await processUserFile(filePath, dryRun)
+    const processedUser = await processUserFile(filePath, sourceDir, dryRun)
     if (processedUser) {
       processedUsers.push(processedUser)
       successCount++

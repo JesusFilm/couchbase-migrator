@@ -13,6 +13,10 @@ import {
   prismaApiMedia,
   Prisma as PrismaApiMedia,
 } from '../../lib/prisma/api-media/client'
+import {
+  writeErrorToFile,
+  clearErrorsDirectory,
+} from '../../lib/error-handler.js'
 
 // Zod schemas for playlist data validation
 const PlaylistItemSchema = z.object({
@@ -108,6 +112,7 @@ async function generateUniqueSlug(): Promise<string> {
  */
 function validateAndTransformPlaylist(
   rawData: unknown,
+  sourceDir: string,
   fileID: string
 ): ProcessedPlaylist | null {
   try {
@@ -119,6 +124,7 @@ function validateAndTransformPlaylist(
         '⚠️ Playlist document validation failed:',
         parseResult.error.issues
       )
+      writeErrorToFile(sourceDir, 'playlists', fileID, parseResult.error)
       return null
     }
 
@@ -176,6 +182,7 @@ function validateAndTransformPlaylist(
  */
 async function processPlaylistFile(
   filePath: string,
+  sourceDir: string,
   dryRun: boolean
 ): Promise<ProcessedPlaylist | null> {
   try {
@@ -183,7 +190,11 @@ async function processPlaylistFile(
     const rawData = JSON.parse(fileContent)
     const fileID = path.basename(filePath, '.json')
 
-    const processedPlaylist = validateAndTransformPlaylist(rawData, fileID)
+    const processedPlaylist = validateAndTransformPlaylist(
+      rawData,
+      sourceDir,
+      fileID
+    )
     if (!processedPlaylist) {
       console.log(
         `⏭️ Skipping invalid playlist file: ${path.basename(filePath)}`
@@ -201,10 +212,12 @@ async function processPlaylistFile(
         },
       })
       if (!relatedUser) {
-        console.error(
-          `❌ User not found for playlist ${processedPlaylist.name}`
+        const error = new Error(
+          `User not found for playlist ${processedPlaylist.name}`
         )
-        throw new Error(`User not found for playlist ${processedPlaylist.name}`)
+        console.error(`❌ ${error.message}`)
+        await writeErrorToFile(sourceDir, 'playlists', filePath, error)
+        throw error
       }
       const playListToSave: PrismaApiMedia.PlaylistCreateInput = {
         id: processedPlaylist.id,
@@ -296,6 +309,7 @@ async function processPlaylistFile(
       }
     } catch (error) {
       console.error(`❌ Error saving playlist to local database:`, error)
+      await writeErrorToFile(sourceDir, 'playlists', filePath, error)
       return null
     }
 
@@ -305,6 +319,7 @@ async function processPlaylistFile(
     return processedPlaylist
   } catch (error) {
     console.error(`❌ Error processing playlist file ${filePath}:`, error)
+    await writeErrorToFile(sourceDir, 'playlists', filePath, error)
     return null
   }
 }
@@ -392,6 +407,9 @@ export async function ingestPlaylists(
   console.log(`📁 Source directory: ${playlistDir}`)
   console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
 
+  // Clear errors directory at the beginning
+  await clearErrorsDirectory(sourceDir, 'playlists')
+
   // Check if playlist directory exists
   try {
     await fs.access(playlistDir)
@@ -415,7 +433,11 @@ export async function ingestPlaylists(
   let errorCount = 0
 
   for (const filePath of playlistFiles) {
-    const processedPlaylist = await processPlaylistFile(filePath, dryRun)
+    const processedPlaylist = await processPlaylistFile(
+      filePath,
+      sourceDir,
+      dryRun
+    )
     if (processedPlaylist) {
       processedPlaylists.push(processedPlaylist)
       successCount++
