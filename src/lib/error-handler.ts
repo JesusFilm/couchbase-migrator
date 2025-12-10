@@ -13,12 +13,14 @@ import path from 'path'
  * @param category Error category (e.g., 'users', 'playlists')
  * @param filePath Original file path
  * @param error Error that occurred
+ * @param data Optional data object to save along with the error
  */
 export async function writeErrorToFile(
   sourceDir: string,
   category: string,
   filePath: string,
-  error: unknown
+  error: unknown,
+  data?: unknown
 ): Promise<void> {
   try {
     const errorsDir = path.join(sourceDir, 'errors', category)
@@ -36,7 +38,25 @@ export async function writeErrorToFile(
           ? error
           : JSON.stringify(error, null, 2)
 
-    await fs.writeFile(errorFilePath, errorString, 'utf8')
+    // Build the error object with both error and data
+    const errorObject: {
+      error: string
+      data?: unknown
+    } = {
+      error: errorString,
+    }
+
+    // Add data if provided
+    if (data !== undefined) {
+      errorObject.data = data
+    }
+
+    // Write as JSON for better readability
+    await fs.writeFile(
+      errorFilePath,
+      JSON.stringify(errorObject, null, 2),
+      'utf8'
+    )
   } catch (writeError) {
     console.error(`❌ Failed to write error file for ${filePath}:`, writeError)
   }

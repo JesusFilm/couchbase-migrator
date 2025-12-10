@@ -102,7 +102,7 @@ function validateAndTransformUser(
         parseResult.error.issues,
         cas
       )
-      writeErrorToFile(sourceDir, 'users', filePath, parseResult.error)
+      writeErrorToFile(sourceDir, 'users', filePath, parseResult.error, rawData)
       return null
     }
 
@@ -197,7 +197,13 @@ async function processUserFile(
               `❌ Error creating Firebase user for ${userData.email}:`,
               error
             )
-            await writeErrorToFile(sourceDir, 'users', filePath, error)
+            await writeErrorToFile(
+              sourceDir,
+              'users',
+              filePath,
+              error,
+              userData
+            )
             return null
           }
         } else {
@@ -210,7 +216,7 @@ async function processUserFile(
         `❌ Error uploading user to firebase for user file ${filePath}:`,
         error
       )
-      await writeErrorToFile(sourceDir, 'users', filePath, error)
+      await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
       return null
     }
 
@@ -221,7 +227,7 @@ async function processUserFile(
           `Firebase user not found for user ${userData.email}`
         )
         console.error(`❌ ${error.message}`)
-        await writeErrorToFile(sourceDir, 'users', filePath, error)
+        await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
         return null
       }
 
@@ -291,12 +297,20 @@ async function processUserFile(
       return userSavedToCore
     } catch (dbError) {
       console.error(`❌ Database error for user ${userData.owner}:`, dbError)
-      await writeErrorToFile(sourceDir, 'users', filePath, dbError)
+      await writeErrorToFile(sourceDir, 'users', filePath, dbError, userData)
       return null
     }
   } catch (error) {
     console.error(`❌ Error processing user file ${filePath}:`, error)
-    await writeErrorToFile(sourceDir, 'users', filePath, error)
+    // Try to read rawData if available, otherwise use undefined
+    let rawData: unknown
+    try {
+      const fileContent = await fs.readFile(filePath, 'utf8')
+      rawData = JSON.parse(fileContent)
+    } catch {
+      rawData = undefined
+    }
+    await writeErrorToFile(sourceDir, 'users', filePath, error, rawData)
     return null
   }
 }

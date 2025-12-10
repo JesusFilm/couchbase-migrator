@@ -124,7 +124,13 @@ function validateAndTransformPlaylist(
         '⚠️ Playlist document validation failed:',
         parseResult.error.issues
       )
-      writeErrorToFile(sourceDir, 'playlists', fileID, parseResult.error)
+      writeErrorToFile(
+        sourceDir,
+        'playlists',
+        fileID,
+        parseResult.error,
+        rawData
+      )
       return null
     }
 
@@ -216,7 +222,13 @@ async function processPlaylistFile(
           `User not found for playlist ${processedPlaylist.name}`
         )
         console.error(`❌ ${error.message}`)
-        await writeErrorToFile(sourceDir, 'playlists', filePath, error)
+        await writeErrorToFile(
+          sourceDir,
+          'playlists',
+          filePath,
+          error,
+          processedPlaylist
+        )
         throw error
       }
       const playListToSave: PrismaApiMedia.PlaylistCreateInput = {
@@ -309,7 +321,13 @@ async function processPlaylistFile(
       }
     } catch (error) {
       console.error(`❌ Error saving playlist to local database:`, error)
-      await writeErrorToFile(sourceDir, 'playlists', filePath, error)
+      await writeErrorToFile(
+        sourceDir,
+        'playlists',
+        filePath,
+        error,
+        processedPlaylist
+      )
       return null
     }
 
@@ -319,7 +337,15 @@ async function processPlaylistFile(
     return processedPlaylist
   } catch (error) {
     console.error(`❌ Error processing playlist file ${filePath}:`, error)
-    await writeErrorToFile(sourceDir, 'playlists', filePath, error)
+    // Try to read rawData if available, otherwise use undefined
+    let rawData: unknown
+    try {
+      const fileContent = await fs.readFile(filePath, 'utf8')
+      rawData = JSON.parse(fileContent)
+    } catch {
+      rawData = undefined
+    }
+    await writeErrorToFile(sourceDir, 'playlists', filePath, error, rawData)
     return null
   }
 }
