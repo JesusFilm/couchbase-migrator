@@ -13,47 +13,18 @@ import {
   Prisma,
   User,
 } from '../../lib/prisma/api-users/client.js'
-import { prismaUsers } from '../../lib/prisma/users/client.js'
+import {
+  prismaUsers,
+  User as UserLocal,
+} from '../../lib/prisma/users/client.js'
 import { v4 as uuidv4 } from 'uuid'
 import { auth } from '../../lib/firebase.js'
 import {
   writeErrorToFile,
   clearErrorsDirectory,
 } from '../../lib/error-handler.js'
-
-// Zod schemas for user data validation
-const SyncDataSchema = z.object({
-  rev: z.string(),
-  sequence: z.number(),
-  recent_sequences: z.array(z.number()),
-  history: z.object({
-    revs: z.array(z.string()),
-    parents: z.array(z.number()),
-    channels: z.array(z.union([z.null(), z.array(z.string())])),
-  }),
-  channels: z.record(z.string(), z.union([z.null(), z.object({})])).optional(),
-  access: z.record(z.string(), z.record(z.string(), z.number())).optional(),
-  time_saved: z.string(),
-})
-
-const UserProfileSchema = z.object({
-  _sync: SyncDataSchema,
-  createdAt: z.string(),
-  email: z.email(),
-  homeCountry: z.string().optional(),
-  nameFirst: z.string(),
-  nameLast: z.string(),
-  notificationCountries: z.array(z.string()).optional().default([]),
-  owner: z.string(),
-  theKeyGrPersonId: z.string().optional().nullable(),
-  theKeyGuid: z.string(),
-  theKeyRelayGuid: z.string(),
-  theKeySsoGuid: z.string(),
-  type: z.literal('profile'),
-  updatedAt: z.string(),
-})
-
-type UserProfile = z.infer<typeof UserProfileSchema> & { cas: number }
+import { env } from '../../lib/env.js'
+import { UserProfileSchema, type UserProfile, type OktaUser } from './types.js'
 
 const UserDocumentSchema = z.object({
   'JFM-profiles': UserProfileSchema,
@@ -106,8 +77,12 @@ function validateAndTransformUser(
       return null
     }
 
+    const userProfile = parseResult.data['JFM-profiles']
+
+    // Normalize email to lowercase for consistent database lookups
     return {
-      ...parseResult.data['JFM-profiles'],
+      ...userProfile,
+      email: userProfile.email.toLowerCase(),
       cas: parseResult.data.cas,
     }
   } catch (error) {
@@ -127,7 +102,7 @@ async function processUserFile(
   filePath: string,
   sourceDir: string,
   dryRun: boolean
-): Promise<User | null> {
+): Promise<User | UserLocal | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
     const rawData = JSON.parse(fileContent)
@@ -142,6 +117,153 @@ async function processUserFile(
       console.log(`⏭️ Skipping user ${userData.theKeySsoGuid} in dry run`)
       return null
     }
+
+    // Check if user already exists in local database - ownerId is the primary key
+    // First check by email (since email is unique)
+    const existingLocalUser = await prismaUsers.user.findUnique({
+      where: { email: userData.email },
+    })
+    if (existingLocalUser) {
+      console.log(
+        `✅ User with email ${userData.email} already exists in local database`
+      )
+      return existingLocalUser
+    }
+
+    // Fetch user from Okta API by SSO GUID
+    let oktaUserData
+
+    try {
+      const oktaResponse = await fetch(
+        `https://signon.okta.com/api/v1/users?filter=profile.email eq "${encodeURIComponent(userData.email)}"`,
+        {
+          headers: {
+            Authorization: `SSWS ${env.OKTA_TOKEN}`,
+            Accept: 'application/json',
+          },
+        }
+      )
+
+      if (!oktaResponse.ok) {
+        if (oktaResponse.status === 404) {
+          console.warn(
+            `⚠️ User with email ${userData.email} and ssoGuid ${userData.theKeySsoGuid} not found in Okta`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            oktaResponse.status,
+            userData
+          )
+        } else {
+          const errorText = await oktaResponse.text()
+          console.error(
+            `❌ Okta API error (${oktaResponse.status}) for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}: ${errorText}`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            oktaResponse.status,
+            userData
+          )
+          return null
+        }
+      } else {
+        // Read response body once - filter endpoint returns an array
+        const responseData = (await oktaResponse.json()) as OktaUser[]
+
+        if (!responseData || responseData.length === 0) {
+          console.warn(`⚠️ No users found in Okta for email ${userData.email}`)
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            new Error('No users found in Okta response'),
+            userData
+          )
+          return null
+        }
+
+        // Get the first user from the array (should only be one for exact email match)
+        const resData = responseData[0]
+        if (!resData) {
+          console.warn(
+            `⚠️ No user data in Okta response for email ${userData.email}`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            new Error('No user data in Okta response'),
+            userData
+          )
+          return null
+        }
+
+        if (resData.profile.theKeyGuid !== userData.theKeySsoGuid) {
+          writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            new Error('Okta user GUID mismatch'),
+            userData
+          )
+          return null
+        }
+        const emails = resData.credentials?.emails
+        const primaryEmail = resData.credentials?.emails?.find(
+          email => email.type === 'PRIMARY'
+        )
+        if (!primaryEmail) {
+          console.warn(
+            `⚠️ No primary email found in Okta response for email ${userData.email}`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            new Error('No primary email found in Okta response'),
+            userData
+          )
+          return null
+        }
+        oktaUserData = {
+          id: resData.id,
+          email: userData.email,
+          firstName: resData.profile.firstName,
+          lastName: resData.profile.lastName,
+          status: resData.status,
+          primaryEmail: primaryEmail.value,
+          secondaryEmails: emails?.map(email => email.value),
+          isSecondaryAccount: userData.email !== primaryEmail.value,
+        }
+
+        console.log(
+          `✅ Fetched Okta user data for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}:`,
+          {
+            id: oktaUserData?.id,
+            email: oktaUserData?.email,
+            status: oktaUserData?.status,
+            isSecondaryAccount: oktaUserData?.isSecondaryAccount,
+            firstName: oktaUserData?.firstName,
+            lastName: oktaUserData?.lastName,
+            primaryEmail: oktaUserData?.primaryEmail,
+            secondaryEmails: oktaUserData?.secondaryEmails,
+          }
+        )
+      }
+    } catch (error) {
+      console.error(
+        `❌ Error fetching user from Okta API for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}:`,
+        error
+      )
+      await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
+      return null
+      // Continue processing even if Okta fetch fails
+    }
+
     // Check if user exists by email in Firebase
     let firebaseUser: admin.auth.UserRecord | null = null
     try {
@@ -153,7 +275,7 @@ async function processUserFile(
         const oktaProvider = firebaseUser.providerData.find(
           provider => provider.providerId === 'oidc.okta'
         )
-        if (!oktaProvider) {
+        if (!oktaProvider && oktaUserData?.isSecondaryAccount === false) {
           firebaseUser = await auth.updateUser(firebaseUser.uid, {
             providerToLink: {
               providerId: 'oidc.okta',
@@ -175,20 +297,24 @@ async function processUserFile(
           try {
             firebaseUser = await auth.createUser({
               email: userData.email,
-              emailVerified: true,
+              emailVerified:
+                oktaUserData?.isSecondaryAccount === true ? false : true,
               displayName: `${userData.nameFirst} ${userData.nameLast}`.trim(),
               disabled: false,
             })
-            //  link Okta provider
-            firebaseUser = await auth.updateUser(firebaseUser.uid, {
-              providerToLink: {
-                providerId: 'oidc.okta',
-                uid: userData.theKeySsoGuid,
-                displayName:
-                  `${userData.nameFirst} ${userData.nameLast}`.trim(),
-                email: userData.email,
-              },
-            })
+            // if secondary account they can only sign in via email
+            if (oktaUserData?.isSecondaryAccount === false) {
+              firebaseUser = await auth.updateUser(firebaseUser.uid, {
+                providerToLink: {
+                  providerId: 'oidc.okta',
+                  uid: userData.theKeySsoGuid,
+                  displayName:
+                    `${userData.nameFirst} ${userData.nameLast}`.trim(),
+                  email: userData.email,
+                },
+              })
+            }
+
             console.log(
               `✅ Created Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
             )
@@ -222,78 +348,67 @@ async function processUserFile(
 
     // Save to database using Prisma
     try {
-      if (!firebaseUser || !firebaseUser.email) {
+      if (!firebaseUser.email) {
         const error = new Error(
-          `Firebase user not found for user ${userData.email}`
+          `Firebase user dooes not have email for:  ${userData.email}`
         )
         console.error(`❌ ${error.message}`)
         await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
         return null
       }
 
-      const user: Prisma.UserCreateInput = {
-        id: uuidv4(),
-        userId: firebaseUser.uid,
-        firstName: firebaseUser.displayName?.split(' ')[0] ?? '',
-        lastName: firebaseUser.displayName?.split(' ')[1] ?? '',
-        email: firebaseUser.email,
-        emailVerified: firebaseUser.emailVerified,
-        superAdmin: false,
-      }
-
-      // Check if user already exists
-      const existingUser = await prismaApiUsers.user.findUnique({
-        where: { userId: firebaseUser.uid },
+      // Check if user already exists (use lowercase for consistent lookups)
+      const existingUser = await prismaApiUsers.user.findFirst({
+        where: {
+          email: firebaseUser.email.toLowerCase(),
+        },
       })
 
       let userSavedToCore: User
 
       if (existingUser) {
-        // User exists - check if Firebase ID matches
-        if (existingUser.userId === firebaseUser.uid) {
-          // Firebase ID matches, skip
-          console.log(
-            `ℹ️ User ${firebaseUser.email} already exists in database`
-          )
-          userSavedToCore = existingUser
-        } else {
-          // Firebase ID mismatched, update
-          userSavedToCore = await prismaApiUsers.user.update({
-            where: { id: userData.owner },
-            data: user,
-          })
-          console.log(
-            `✅ Updated user ${firebaseUser.email} in database (Firebase ID was mismatched)`
-          )
-        }
+        console.log(
+          `✅ User ${firebaseUser.email} already exists in core database`
+        )
+        userSavedToCore = await prismaApiUsers.user.update({
+          where: { email: existingUser.email },
+          data: {
+            userId: firebaseUser.uid,
+            email: firebaseUser.email.toLowerCase(),
+            emailVerified: true,
+          },
+        })
       } else {
-        // User doesn't exist, create
+        // User doesn't exist, create (use lowercase email)
+        const user: Prisma.UserCreateInput = {
+          id: uuidv4(),
+          userId: firebaseUser.uid,
+          firstName: firebaseUser.displayName?.split(' ')[0] ?? '',
+          lastName: firebaseUser.displayName?.split(' ')[1] ?? '',
+          email: firebaseUser.email.toLowerCase(),
+          emailVerified: firebaseUser.emailVerified,
+          superAdmin: false,
+        }
+
         userSavedToCore = await prismaApiUsers.user.create({
           data: user,
         })
-        console.log(`✅ Created user ${firebaseUser.email} in database`)
+        console.log(`✅ Created user ${firebaseUser.email} in core database`)
       }
-      // Check if user already exists in local database
-      const existingLocalUser = await prismaUsers.user.findUnique({
-        where: { email: firebaseUser.email },
-      })
 
-      if (existingLocalUser) {
-        console.log(
-          `ℹ️ User ${firebaseUser.email} already exists in local database`
-        )
-      } else {
-        const userToSaveToLocal = {
-          ownerId: userData.owner,
-          email: firebaseUser.email,
-          ssoGuid: userData.theKeySsoGuid,
-          coreId: userSavedToCore.id,
-        }
-        await prismaUsers.user.create({
-          data: userToSaveToLocal,
-        })
-        console.log(`✅ Saved user ${firebaseUser.email} to local database`)
+      const userToSaveToLocal = {
+        ownerId: userData.owner,
+        email: firebaseUser.email.toLowerCase(),
+        ssoGuid: userData.theKeySsoGuid,
+        coreId: userSavedToCore.id,
+        isSecondaryAccount: oktaUserData?.isSecondaryAccount ?? true,
       }
+
+      await prismaUsers.user.create({
+        data: userToSaveToLocal,
+      })
+      console.log(`✅ Saved user ${firebaseUser.email} to local database`)
+
       return userSavedToCore
     } catch (dbError) {
       console.error(`❌ Database error for user ${userData.owner}:`, dbError)
@@ -362,7 +477,7 @@ export interface UserIngestionSummary {
   successCount: number
   errorCount: number
   totalFiles: number
-  processedUsers: User[]
+  processedUsers: (User | UserLocal)[]
 }
 
 /**
@@ -399,7 +514,7 @@ export async function ingestUsers(
   console.log(`📊 Found ${userFiles.length} user files to process`)
 
   // Process each user file
-  const processedUsers: User[] = []
+  const processedUsers: (User | UserLocal)[] = []
   let successCount = 0
   let errorCount = 0
 
@@ -417,9 +532,13 @@ export async function ingestUsers(
     console.log('\n🔍 Dry run - showing sample processed users:')
     processedUsers.slice(0, 3).forEach((user, index) => {
       console.log(`\nUser ${index + 1}:`)
-      console.log(`  Name: ${user.firstName} ${user.lastName ?? ''}`)
+      if ('firstName' in user && 'lastName' in user) {
+        console.log(`  Name: ${user.firstName} ${user.lastName ?? ''}`)
+      }
       console.log(`  Email: ${user.email}`)
-      console.log(`  User ID: ${user.userId}`)
+      if ('userId' in user) {
+        console.log(`  User ID: ${user.userId}`)
+      }
     })
   }
 
