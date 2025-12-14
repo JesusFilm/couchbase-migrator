@@ -229,6 +229,7 @@ async function processUserFile(
           lastName: resData.profile.lastName,
           status: resData.status,
           primaryEmail: primaryEmail.value,
+          primaryEmailObject: primaryEmail,
           secondaryEmails: emails?.map(email => email.value),
           isSecondaryAccount: userData.email !== primaryEmail.value,
           theKeySsoGuid: resData.profile.theKeyGuid,
@@ -273,7 +274,7 @@ async function processUserFile(
     let firebaseUser: admin.auth.UserRecord | null = null
     try {
       try {
-        firebaseUser = await auth.getUserByEmail(userData.email)
+        firebaseUser = await auth.getUserByEmail(oktaUserData.primaryEmail)
         console.log(
           `ℹ️ User with email ${userData.email} already exists in Firebase (UID: ${firebaseUser.uid})`
         )
@@ -286,8 +287,9 @@ async function processUserFile(
               providerId: 'oidc.okta',
               // use theKeySsoGuid from the OKTA response object because it is the correct one
               uid: oktaUserData?.theKeySsoGuid,
-              displayName: `${userData.nameFirst} ${userData.nameLast}`.trim(),
-              email: userData.email,
+              displayName:
+                `${oktaUserData.firstName} ${oktaUserData.lastName}`.trim(),
+              email: oktaUserData.primaryEmail,
             },
           })
           console.log(
@@ -302,24 +304,24 @@ async function processUserFile(
         if (firebaseError.code === 'auth/user-not-found') {
           try {
             firebaseUser = await auth.createUser({
-              email: userData.email,
+              email: oktaUserData.primaryEmail,
               emailVerified:
-                oktaUserData.isSecondaryAccount === true ? false : true,
-              displayName: `${userData.nameFirst} ${userData.nameLast}`.trim(),
+                oktaUserData.primaryEmailObject?.status === 'VERIFIED'
+                  ? true
+                  : false,
+              displayName:
+                `${oktaUserData.firstName} ${oktaUserData.lastName}`.trim(),
               disabled: false,
             })
-            // if secondary account they can only sign in via email
-            if (oktaUserData?.isSecondaryAccount === false) {
-              firebaseUser = await auth.updateUser(firebaseUser.uid, {
-                providerToLink: {
-                  providerId: 'oidc.okta',
-                  uid: oktaUserData.theKeySsoGuid,
-                  displayName:
-                    `${userData.nameFirst} ${userData.nameLast}`.trim(),
-                  email: userData.email,
-                },
-              })
-            }
+            firebaseUser = await auth.updateUser(firebaseUser.uid, {
+              providerToLink: {
+                providerId: 'oidc.okta',
+                uid: oktaUserData.theKeySsoGuid,
+                displayName:
+                  `${oktaUserData.firstName} ${oktaUserData.lastName}`.trim(),
+                email: oktaUserData.primaryEmail,
+              },
+            })
 
             console.log(
               `✅ Created Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
