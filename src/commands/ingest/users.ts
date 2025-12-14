@@ -114,7 +114,7 @@ async function processUserFile(
     }
 
     if (dryRun) {
-      console.log(`⏭️ Skipping user ${userData.theKeySsoGuid} in dry run`)
+      console.log(`⏭️ Skipping user ${userData.email} in dry run`)
       return null
     }
 
@@ -134,8 +134,9 @@ async function processUserFile(
     let oktaUserData
 
     try {
+      const filterExpression = `profile.theKeyGuid eq "${userData.theKeySsoGuid.trim()}"`
       const oktaResponse = await fetch(
-        `https://signon.okta.com/api/v1/users?filter=profile.email eq "${encodeURIComponent(userData.email)}"`,
+        `https://signon.okta.com/api/v1/users?search=${encodeURIComponent(filterExpression)}`,
         {
           headers: {
             Authorization: `SSWS ${env.OKTA_TOKEN}`,
@@ -180,7 +181,9 @@ async function processUserFile(
             sourceDir,
             'users',
             filePath,
-            new Error('No users found in Okta response'),
+            new Error(
+              `No users found in Okta response for email ${userData.email}: ${JSON.stringify(responseData)}`
+            ),
             userData
           )
           return null
@@ -202,16 +205,6 @@ async function processUserFile(
           return null
         }
 
-        if (resData.profile.theKeyGuid !== userData.theKeySsoGuid) {
-          writeErrorToFile(
-            sourceDir,
-            'users',
-            filePath,
-            new Error('Okta user GUID mismatch'),
-            userData
-          )
-          return null
-        }
         const emails = resData.credentials?.emails
         const primaryEmail = resData.credentials?.emails?.find(
           email => email.type === 'PRIMARY'
@@ -238,6 +231,7 @@ async function processUserFile(
           primaryEmail: primaryEmail.value,
           secondaryEmails: emails?.map(email => email.value),
           isSecondaryAccount: userData.email !== primaryEmail.value,
+          theKeySsoGuid: resData.profile.theKeyGuid,
         }
 
         console.log(
@@ -263,6 +257,17 @@ async function processUserFile(
       return null
       // Continue processing even if Okta fetch fails
     }
+    // it shouhldn't be null but adding this to satisfy ts-lint
+    if (!oktaUserData) {
+      await writeErrorToFile(
+        sourceDir,
+        'users',
+        filePath,
+        new Error('oktaUserData object is null'),
+        userData
+      )
+      return null
+    }
 
     // Check if user exists by email in Firebase
     let firebaseUser: admin.auth.UserRecord | null = null
@@ -279,7 +284,8 @@ async function processUserFile(
           firebaseUser = await auth.updateUser(firebaseUser.uid, {
             providerToLink: {
               providerId: 'oidc.okta',
-              uid: userData.theKeySsoGuid,
+              // use theKeySsoGuid from the OKTA response object because it is the correct one
+              uid: oktaUserData?.theKeySsoGuid,
               displayName: `${userData.nameFirst} ${userData.nameLast}`.trim(),
               email: userData.email,
             },
@@ -298,7 +304,7 @@ async function processUserFile(
             firebaseUser = await auth.createUser({
               email: userData.email,
               emailVerified:
-                oktaUserData?.isSecondaryAccount === true ? false : true,
+                oktaUserData.isSecondaryAccount === true ? false : true,
               displayName: `${userData.nameFirst} ${userData.nameLast}`.trim(),
               disabled: false,
             })
@@ -307,7 +313,7 @@ async function processUserFile(
               firebaseUser = await auth.updateUser(firebaseUser.uid, {
                 providerToLink: {
                   providerId: 'oidc.okta',
-                  uid: userData.theKeySsoGuid,
+                  uid: oktaUserData.theKeySsoGuid,
                   displayName:
                     `${userData.nameFirst} ${userData.nameLast}`.trim(),
                   email: userData.email,
@@ -399,7 +405,7 @@ async function processUserFile(
       const userToSaveToLocal = {
         ownerId: userData.owner,
         email: firebaseUser.email.toLowerCase(),
-        ssoGuid: userData.theKeySsoGuid,
+        ssoGuid: oktaUserData.theKeySsoGuid,
         coreId: userSavedToCore.id,
         isSecondaryAccount: oktaUserData?.isSecondaryAccount ?? true,
       }
