@@ -376,14 +376,8 @@ async function processUserFile(
         console.log(
           `✅ User ${firebaseUser.email} already exists in core database`
         )
-        userSavedToCore = await prismaApiUsers.user.update({
-          where: { email: existingUser.email },
-          data: {
-            userId: firebaseUser.uid,
-            email: firebaseUser.email.toLowerCase(),
-            emailVerified: true,
-          },
-        })
+        userSavedToCore = existingUser
+        return userSavedToCore
       } else {
         // User doesn't exist, create (use lowercase email)
         const user: Prisma.UserCreateInput = {
