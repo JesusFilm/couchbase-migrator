@@ -7,6 +7,8 @@ Before running the script, you need to set up the database URLs in your environm
 - `PRISMA_API_USERS_URL` - Database connection URL for API Users
 - `PRISMA_API_MEDIA_URL` - Database connection URL for API Media
 - `PRISMA_USERS_URL` - Database connection URL for Users (optional), this is a SQLite Database used to temporarily store user data needed for other objects.
+- `GOOGLE_APPLICATION_JSON` - Firebase database to save users
+- `OKTA_TOKEN` - needed to validate user's SSO GUID against.
 
 These should be set in your `.env` file in the project root.
 
@@ -47,3 +49,9 @@ pnpm dev ingest --pipeline users
 pnpm dev ingest --pipeline playlists
 pnpm dev ingest --pipeline all
 ```
+
+## Additional Info.
+
+`reset:firebase` is used to batch delete firebase users. be warned this is dangerous - only do this in dev environment.
+
+This is becuase the email could be used to login to other Jesus Film Apps, ergo, this should only be used to test scripting in dev environments.
