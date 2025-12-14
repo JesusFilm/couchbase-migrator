@@ -22,4 +22,3 @@ model User {
 
   @@unique([ownerId, email, ssoGuid, coreId])
 }
-
