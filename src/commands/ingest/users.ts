@@ -123,7 +123,6 @@ async function processUserFile(
     const existingLocalUser = await prismaUsers.user.findUnique({
       where: {
         ssoGuid: userData.theKeySsoGuid,
-        email: userData.email.toLowerCase(),
       },
     })
     if (existingLocalUser) {
@@ -394,7 +393,6 @@ async function processUserFile(
           `✅ User ${firebaseUser.email} already exists in core database`
         )
         userSavedToCore = existingUser
-        return userSavedToCore
       } else {
         // User doesn't exist, create (use lowercase email)
         const user: Prisma.UserCreateInput = {
