@@ -118,14 +118,17 @@ async function processUserFile(
       return null
     }
 
-    // Check if user already exists in local database - ownerId is the primary key
-    // First check by email (since email is unique)
+    // Check if user already exists in local database
+    // check by SSO GUID since it is unique
     const existingLocalUser = await prismaUsers.user.findUnique({
-      where: { email: userData.email },
+      where: {
+        ssoGuid: userData.theKeySsoGuid,
+        email: userData.email.toLowerCase(),
+      },
     })
     if (existingLocalUser) {
       console.log(
-        `✅ User with email ${userData.email} already exists in local database`
+        `✅ User with ssoGuid ${userData.theKeySsoGuid} and email ${userData.email} already exists in local database`
       )
       return existingLocalUser
     }
@@ -157,6 +160,7 @@ async function processUserFile(
             oktaResponse.status,
             userData
           )
+          return null
         } else {
           const errorText = await oktaResponse.text()
           console.error(
@@ -189,8 +193,23 @@ async function processUserFile(
           return null
         }
 
-        // Get the first user from the array (should only be one for exact email match)
+        if (responseData.length > 1) {
+          console.warn(
+            `⚠️ Multiple users found in Okta for SSO GUID ${userData.theKeySsoGuid}`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            new Error('Multiple users found in Okta response'),
+            userData
+          )
+          return null
+        }
+
+        // Get the first user from the array (should only be one for exact SSO match)
         const resData = responseData[0]
+
         if (!resData) {
           console.warn(
             `⚠️ No user data in Okta response for email ${userData.email}`
@@ -224,14 +243,11 @@ async function processUserFile(
         }
         oktaUserData = {
           id: resData.id,
-          email: userData.email,
           firstName: resData.profile.firstName,
           lastName: resData.profile.lastName,
           status: resData.status,
           primaryEmail: primaryEmail.value,
           primaryEmailObject: primaryEmail,
-          secondaryEmails: emails?.map(email => email.value),
-          isSecondaryAccount: userData.email !== primaryEmail.value,
           theKeySsoGuid: resData.profile.theKeyGuid,
         }
 
@@ -239,13 +255,12 @@ async function processUserFile(
           `✅ Fetched Okta user data for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}:`,
           {
             id: oktaUserData?.id,
-            email: oktaUserData?.email,
+            email: userData?.email,
             status: oktaUserData?.status,
-            isSecondaryAccount: oktaUserData?.isSecondaryAccount,
             firstName: oktaUserData?.firstName,
             lastName: oktaUserData?.lastName,
             primaryEmail: oktaUserData?.primaryEmail,
-            secondaryEmails: oktaUserData?.secondaryEmails,
+            emails: emails?.map(email => email.value),
           }
         )
       }
@@ -281,7 +296,7 @@ async function processUserFile(
         const oktaProvider = firebaseUser.providerData.find(
           provider => provider.providerId === 'oidc.okta'
         )
-        if (!oktaProvider && oktaUserData?.isSecondaryAccount === false) {
+        if (!oktaProvider) {
           firebaseUser = await auth.updateUser(firebaseUser.uid, {
             providerToLink: {
               providerId: 'oidc.okta',
@@ -403,7 +418,6 @@ async function processUserFile(
         email: firebaseUser.email.toLowerCase(),
         ssoGuid: oktaUserData.theKeySsoGuid,
         coreId: userSavedToCore.id,
-        isSecondaryAccount: oktaUserData?.isSecondaryAccount ?? true,
       }
 
       await prismaUsers.user.create({
