@@ -242,7 +242,14 @@ async function processPlaylistFile(
         )
         throw error
       }
-      const playListToSave: PrismaApiMedia.PlaylistCreateInput = {
+      // Check if playlist already exists to determine if we need to generate a slug
+      const existingPlaylist = await prismaApiMedia.playlist.findUnique({
+        where: { id: processedPlaylist.id },
+      })
+
+      const slug = existingPlaylist?.slug || (await generateUniqueSlug())
+
+      const playListToCreate: PrismaApiMedia.PlaylistCreateInput = {
         id: processedPlaylist.id,
         name: processedPlaylist.name,
         note: processedPlaylist.note,
@@ -250,12 +257,22 @@ async function processPlaylistFile(
         ownerId: relatedUser.coreId,
         createdAt: processedPlaylist.createdAt,
         updatedAt: processedPlaylist.updatedAt,
-        slug: await generateUniqueSlug(),
+        slug,
       }
+
+      const playListToUpdate: PrismaApiMedia.PlaylistUpdateInput = {
+        name: processedPlaylist.name,
+        note: processedPlaylist.note,
+        noteUpdatedAt: processedPlaylist.noteModifiedAt,
+        ownerId: relatedUser.coreId,
+        updatedAt: processedPlaylist.updatedAt,
+        // Don't update slug or createdAt on existing playlists
+      }
+
       await prismaApiMedia.playlist.upsert({
         where: { id: processedPlaylist.id },
-        update: playListToSave,
-        create: playListToSave,
+        update: playListToUpdate,
+        create: playListToCreate,
       })
 
       // Save playlist items
@@ -265,19 +282,6 @@ async function processPlaylistFile(
 
         for (const item of processedPlaylist.items) {
           try {
-            // Check if playlist item already exists (by playlistId and order)
-            const existingItem = await prismaApiMedia.playlistItem.findFirst({
-              where: {
-                playlistId: processedPlaylist.id,
-                order: item.order,
-              },
-            })
-
-            if (existingItem) {
-              skippedItems.push(item)
-              continue
-            }
-
             // Look up VideoVariant by slug (mediaComponentId)
             const videoVariant = await prismaApiMedia.videoVariant.findUnique({
               where: {
@@ -291,13 +295,39 @@ async function processPlaylistFile(
               console.warn(
                 `⚠️ VideoVariant not found for mediaComponentId: ${item.mediaComponentId} (playlist: ${processedPlaylist.name})`
               )
+              const error = new Error(
+                `VideoVariant not found for mediaComponentId: ${item.mediaComponentId}`
+              )
+              const errorFilePath = `${processedPlaylist.id}-${item.order}-${item.mediaComponentId}.json`
+              await writeErrorToFile(
+                sourceDir,
+                'playListItems',
+                errorFilePath,
+                error,
+                {
+                  playlistId: processedPlaylist.id,
+                  playlistName: processedPlaylist.name,
+                  item,
+                }
+              )
               skippedItems.push(item)
               continue
             }
 
-            // Create playlist item
+            // Check if playlist item already exists (by playlistId and order)
+            const existingItem = await prismaApiMedia.playlistItem.findFirst({
+              where: {
+                playlistId: processedPlaylist.id,
+                order: item.order,
+              },
+            })
+
+            // Use existing ID if found, otherwise generate new one
+            const itemId = existingItem?.id || uuidv4()
+
+            // Upsert playlist item
             const playlistItemToSave: PrismaApiMedia.PlaylistItemCreateInput = {
-              id: uuidv4(),
+              id: itemId,
               order: item.order,
               createdAt: item.createdAt,
               updatedAt: item.updatedAt,
@@ -309,14 +339,34 @@ async function processPlaylistFile(
               },
             }
 
-            await prismaApiMedia.playlistItem.create({
-              data: playlistItemToSave,
+            await prismaApiMedia.playlistItem.upsert({
+              where: { id: itemId },
+              update: {
+                order: item.order,
+                updatedAt: item.updatedAt,
+                VideoVariant: {
+                  connect: { id: videoVariant.id },
+                },
+              },
+              create: playlistItemToSave,
             })
             savedItems.push(item)
           } catch (itemError) {
             console.error(
               `❌ Error saving playlist item for mediaComponentId ${item.mediaComponentId}:`,
               itemError
+            )
+            const errorFilePath = `${processedPlaylist.id}-${item.order}-${item.mediaComponentId}.json`
+            await writeErrorToFile(
+              sourceDir,
+              'playListItems',
+              errorFilePath,
+              itemError,
+              {
+                playlistId: processedPlaylist.id,
+                playlistName: processedPlaylist.name,
+                item,
+              }
             )
             skippedItems.push(item)
           }
@@ -466,6 +516,7 @@ export async function ingestPlaylists(
 
   // Clear errors directory at the beginning
   await clearErrorsDirectory(sourceDir, 'playlists')
+  await clearErrorsDirectory(sourceDir, 'playListItems')
 
   // Check if playlist directory exists
   try {
