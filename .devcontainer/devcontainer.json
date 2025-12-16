@@ -1,0 +1,15 @@
+{
+  "name": "Couchbase Migrator",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:18",
+  "postCreateCommand": "corepack enable && corepack prepare pnpm@10.15.1 --activate && pnpm install",
+  "customizations": {
+    "vscode": {
+      "extensions": [],
+      "settings": {
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "typescript.enablePromptUseWorkspaceTsdk": true
+      }
+    }
+  },
+  "remoteUser": "node"
+}
