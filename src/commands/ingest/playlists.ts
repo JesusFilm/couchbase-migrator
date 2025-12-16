@@ -81,6 +81,11 @@ type ProcessedPlaylist = {
   createdAt: Date
   updatedAt: Date
   cas: number
+  type: 'playlist'
+}
+
+type DeletedPlaylist = {
+  type: 'deleted'
 }
 
 async function generateUniqueSlug(): Promise<string> {
@@ -174,6 +179,7 @@ function validateAndTransformPlaylist(
       createdAt: new Date(playlistData.createdAt || new Date().toISOString()),
       updatedAt: new Date(playlistData.updatedAt || new Date().toISOString()),
       cas: parseResult.data.cas,
+      type: 'playlist',
     }
   } catch (error) {
     console.error('❌ Error validating playlist data:', error)
@@ -190,10 +196,15 @@ async function processPlaylistFile(
   filePath: string,
   sourceDir: string,
   dryRun: boolean
-): Promise<ProcessedPlaylist | null> {
+): Promise<ProcessedPlaylist | DeletedPlaylist | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
     const rawData = JSON.parse(fileContent)
+    if (rawData?.['JFM-profiles']?._deleted === true) {
+      return {
+        type: 'deleted',
+      }
+    }
     const fileID = path.basename(filePath, '.json')
 
     const processedPlaylist = validateAndTransformPlaylist(
@@ -489,7 +500,9 @@ export async function ingestPlaylists(
       dryRun
     )
     if (processedPlaylist) {
-      processedPlaylists.push(processedPlaylist)
+      if (processedPlaylist.type === 'playlist') {
+        processedPlaylists.push(processedPlaylist)
+      }
       successCount++
     } else {
       errorCount++
