@@ -315,10 +315,12 @@ async function processPlaylistFile(
             }
 
             // Check if playlist item already exists (by playlistId and order)
-            const existingItem = await prismaApiMedia.playlistItem.findFirst({
+            const existingItem = await prismaApiMedia.playlistItem.findUnique({
               where: {
-                playlistId: processedPlaylist.id,
-                order: item.order,
+                playlistId_order: {
+                  playlistId: processedPlaylist.id,
+                  order: item.order,
+                },
               },
             })
 
