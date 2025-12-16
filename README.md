@@ -1,5 +1,13 @@
 # Couchbase Migrator
 
+## Getting Started
+
+Once the container is built, you need to switch to Node 18 in your terminal using nvm:
+
+```bash
+nvm use 18
+```
+
 ## Environment Setup
 
 Before running the script, you need to set up the database URLs in your environment variables. The following environment variables are required:
@@ -14,11 +22,18 @@ These should be set in your `.env` file in the project root.
 
 ## Schema Setup
 
-Once the database URLs are configured, you need to pull the schema using the pull command. **This must be done before running the script.**
+**Important:** Before pulling the schema, the environment variables (`PRISMA_API_USERS_URL` and `PRISMA_API_MEDIA_URL`) must point to the **production** database to pull the schema.
+
+Once the database URLs are configured to point to production, pull the schema using the pull command:
 
 ```bash
 pnpm prisma:pull
 ```
+
+**After pulling the schema:**
+
+- If you want to run the script **locally**, change the environment variables to point to your **container database**
+- If you want to run scripts against **stage or prod**, keep the environment variables pointing to the respective production databases
 
 ## Running the Script
 
@@ -27,28 +42,41 @@ After setting up the environment variables and pulling the schema, you can run t
 - `build-cache` - Build document cache by migrating documents from Couchbase
 - `ingest` - Ingest documents from cache into Core
 
-###Example usage :
+### Example usage :
 
-#### 1. pull the database schema
+#### 1. Pull the database schema (from production)
+
+**First, ensure your `.env` file has the production database URLs:**
+
+- `PRISMA_API_USERS_URL` → production database
+- `PRISMA_API_MEDIA_URL` → production database
 
 ```bash
 pnpm prisma:pull
 ```
 
-#### 2. build the cache
+#### 2. Configure environment for local development (optional)
+
+If you want to run the script locally, update your `.env` file to point to your container database:
+
+- `PRISMA_API_USERS_URL` → local container database
+- `PRISMA_API_MEDIA_URL` → local container database
+
+#### 3. Build the cache
 
 ```bash
 pnpm dev build-cache
-
 ```
 
-#### 3. ingest into core from cache.
+#### 4. Ingest into core from cache
 
 ```bash
 pnpm dev ingest --pipeline users
 pnpm dev ingest --pipeline playlists
 pnpm dev ingest --pipeline all
 ```
+
+**Note:** If you want to run scripts against stage or prod, ensure your environment variables point to the respective production databases in your `.env` file.
 
 ## Additional Info.
 
