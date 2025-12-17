@@ -91,6 +91,12 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
         `🎵 Total playlist items: ${playlistSummary.analysis.totalItems}`
       )
       console.log(
+        `✅ Successfully saved playlist items: ${playlistSummary.analysis.totalSavedItems}`
+      )
+      console.log(
+        `❌ Skipped playlist items: ${playlistSummary.analysis.totalSkippedItems}`
+      )
+      console.log(
         `📺 Unique media components: ${playlistSummary.analysis.uniqueMediaComponents.size}`
       )
       console.log(

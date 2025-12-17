@@ -23,7 +23,7 @@ const PlaylistItemSchema = z.object({
   createdAt: z.string(),
   languageId: z.number(),
   mediaComponentId: z.string(),
-  type: z.string().optional(),
+  type: z.string().nullish(),
 })
 
 const SyncDataSchema = z.object({
@@ -35,8 +35,8 @@ const SyncDataSchema = z.object({
     parents: z.array(z.number()),
     channels: z.array(z.union([z.null(), z.array(z.string())])),
   }),
-  channels: z.record(z.string(), z.union([z.null(), z.object({})])).optional(),
-  access: z.record(z.string(), z.record(z.string(), z.number())).optional(),
+  channels: z.record(z.string(), z.union([z.null(), z.object({})])).nullish(),
+  access: z.record(z.string(), z.record(z.string(), z.number())).nullish(),
   time_saved: z.string(),
 })
 
@@ -65,7 +65,7 @@ type ProcessedPlaylistItem = {
   updatedAt: Date
   mediaComponentId: string // Used to look up VideoVariant by slug
   languageId: number
-  type?: string | undefined
+  type?: string | null
 }
 type ProcessedPlaylist = {
   id: string
@@ -216,6 +216,13 @@ async function processPlaylistFile(
       console.log(
         `⏭️ Skipping invalid playlist file: ${path.basename(filePath)}`
       )
+      await writeErrorToFile(
+        sourceDir,
+        'playlists',
+        filePath,
+        new Error('Invalid playlist file'),
+        rawData
+      )
       return null
     }
     if (dryRun) {
@@ -282,7 +289,6 @@ async function processPlaylistFile(
 
         for (const item of processedPlaylist.items) {
           try {
-            // Look up VideoVariant by slug (mediaComponentId)
             const videoVariant = await prismaApiMedia.videoVariant.findUnique({
               where: {
                 languageId_videoId: {
