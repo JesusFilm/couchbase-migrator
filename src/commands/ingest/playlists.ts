@@ -7,13 +7,23 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { z } from 'zod'
+import { v4 as uuidv4 } from 'uuid'
+import { prismaUsers } from '../../lib/prisma/users/client'
+import {
+  prismaApiMedia,
+  Prisma as PrismaApiMedia,
+} from '../../lib/prisma/api-media/client'
+import {
+  writeErrorToFile,
+  clearErrorsDirectory,
+} from '../../lib/error-handler.js'
 
 // Zod schemas for playlist data validation
 const PlaylistItemSchema = z.object({
   createdAt: z.string(),
   languageId: z.number(),
   mediaComponentId: z.string(),
-  type: z.string().optional(),
+  type: z.string().nullish(),
 })
 
 const SyncDataSchema = z.object({
@@ -25,22 +35,22 @@ const SyncDataSchema = z.object({
     parents: z.array(z.number()),
     channels: z.array(z.union([z.null(), z.array(z.string())])),
   }),
-  channels: z.record(z.string(), z.union([z.null(), z.object({})])).optional(),
-  access: z.record(z.string(), z.record(z.string(), z.number())).optional(),
+  channels: z.record(z.string(), z.union([z.null(), z.object({})])).nullish(),
+  access: z.record(z.string(), z.record(z.string(), z.number())).nullish(),
   time_saved: z.string(),
 })
 
 const PlaylistProfileSchema = z.object({
   _sync: SyncDataSchema,
-  createdAt: z.string().optional(),
-  note: z.string().optional().default(''),
-  noteModifiedAt: z.string().optional(),
+  createdAt: z.string().nullish(),
+  note: z.string().nullish().default(''),
+  noteModifiedAt: z.string().nullish(),
   owner: z.string(),
-  playlistByDisplayName: z.string().optional(),
-  playlistItems: z.array(PlaylistItemSchema).optional().default([]),
-  playlistName: z.string(),
+  playlistByDisplayName: z.string().nullish(),
+  playlistItems: z.array(PlaylistItemSchema).nullish().default([]),
+  playlistName: z.string().nullish(),
   type: z.literal('playlist'),
-  updatedAt: z.string().optional(),
+  updatedAt: z.string().nullish(),
 })
 
 const PlaylistDocumentSchema = z.object({
@@ -49,7 +59,14 @@ const PlaylistDocumentSchema = z.object({
 })
 
 // Inferred types from Zod schemas
-type PlaylistItem = z.infer<typeof PlaylistItemSchema>
+type ProcessedPlaylistItem = {
+  order: number
+  createdAt: Date
+  updatedAt: Date
+  mediaComponentId: string // Used to look up VideoVariant by slug
+  languageId: number
+  type?: string | null
+}
 type ProcessedPlaylist = {
   id: string
   name: string
@@ -57,11 +74,40 @@ type ProcessedPlaylist = {
   note: string
   noteModifiedAt: Date
   owner: string
-  items: PlaylistItem[]
+  items: ProcessedPlaylistItem[]
   itemCount: number
+  savedItems: ProcessedPlaylistItem[]
+  skippedItems: ProcessedPlaylistItem[]
   createdAt: Date
   updatedAt: Date
   cas: number
+  type: 'playlist'
+}
+
+type DeletedPlaylist = {
+  type: 'deleted'
+}
+
+async function generateUniqueSlug(): Promise<string> {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  const maxAttempts = 10
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let result = ''
+    for (let i = 0; i < 6; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length))
+    }
+
+    const existing = await prismaApiMedia.playlist.findUnique({
+      where: { slug: result },
+    })
+
+    if (!existing) {
+      return result
+    }
+  }
+
+  throw new Error('Unable to generate unique slug after 10 attempts')
 }
 
 /**
@@ -70,7 +116,9 @@ type ProcessedPlaylist = {
  * @returns Processed playlist data or null if invalid
  */
 function validateAndTransformPlaylist(
-  rawData: unknown
+  rawData: unknown,
+  sourceDir: string,
+  fileID: string
 ): ProcessedPlaylist | null {
   try {
     // Parse and validate the raw data with Zod
@@ -81,28 +129,57 @@ function validateAndTransformPlaylist(
         '⚠️ Playlist document validation failed:',
         parseResult.error.issues
       )
+      writeErrorToFile(
+        sourceDir,
+        'playlists',
+        fileID,
+        parseResult.error,
+        rawData
+      )
       return null
     }
 
     const playlistData = parseResult.data['JFM-profiles']
 
+    // Transform playlist items with order and proper date conversion
+    const rawItems = playlistData.playlistItems || []
+    const transformedItems: ProcessedPlaylistItem[] = rawItems.map(
+      (item, index) => {
+        const createdAt = new Date(item.createdAt || new Date().toISOString())
+        const transformedItem: ProcessedPlaylistItem = {
+          order: index,
+          createdAt,
+          updatedAt: createdAt, // Use createdAt as updatedAt if not available
+          mediaComponentId: item.mediaComponentId,
+          languageId: item.languageId,
+        }
+        if (item.type !== undefined) {
+          transformedItem.type = item.type
+        }
+        return transformedItem
+      }
+    )
+
     return {
-      id: playlistData.owner, // Use owner as the playlist ID
-      name: playlistData.playlistName,
+      id: fileID,
+      name: playlistData.playlistName ?? '',
       displayName:
-        playlistData.playlistByDisplayName || playlistData.playlistName,
-      note: playlistData.note || '',
+        playlistData.playlistByDisplayName ?? playlistData.playlistName ?? '',
+      note: playlistData.note ?? '',
       noteModifiedAt: new Date(
         playlistData.noteModifiedAt ||
           playlistData.createdAt ||
           new Date().toISOString()
       ),
       owner: playlistData.owner,
-      items: playlistData.playlistItems || [],
-      itemCount: (playlistData.playlistItems || []).length,
+      items: transformedItems,
+      itemCount: transformedItems.length,
+      savedItems: [], // Will be populated during processing
+      skippedItems: [], // Will be populated during processing
       createdAt: new Date(playlistData.createdAt || new Date().toISOString()),
       updatedAt: new Date(playlistData.updatedAt || new Date().toISOString()),
       cas: parseResult.data.cas,
+      type: 'playlist',
     }
   } catch (error) {
     console.error('❌ Error validating playlist data:', error)
@@ -116,16 +193,209 @@ function validateAndTransformPlaylist(
  * @returns Processed playlist data or null if processing failed
  */
 async function processPlaylistFile(
-  filePath: string
-): Promise<ProcessedPlaylist | null> {
+  filePath: string,
+  sourceDir: string,
+  dryRun: boolean
+): Promise<ProcessedPlaylist | DeletedPlaylist | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
     const rawData = JSON.parse(fileContent)
+    if (rawData?.['JFM-profiles']?._deleted === true) {
+      return {
+        type: 'deleted',
+      }
+    }
+    const fileID = path.basename(filePath, '.json')
 
-    const processedPlaylist = validateAndTransformPlaylist(rawData)
+    const processedPlaylist = validateAndTransformPlaylist(
+      rawData,
+      sourceDir,
+      fileID
+    )
     if (!processedPlaylist) {
       console.log(
         `⏭️ Skipping invalid playlist file: ${path.basename(filePath)}`
+      )
+      await writeErrorToFile(
+        sourceDir,
+        'playlists',
+        filePath,
+        new Error('Invalid playlist file'),
+        rawData
+      )
+      return null
+    }
+    if (dryRun) {
+      console.log(`⏭️ Skipping playlist ${processedPlaylist.name} in dry run`)
+      return processedPlaylist
+    }
+    try {
+      const relatedUser = await prismaUsers.user.findUnique({
+        where: {
+          ownerId: processedPlaylist.owner,
+        },
+      })
+      if (!relatedUser) {
+        const error = new Error(
+          `User not found for playlist ${processedPlaylist.name}`
+        )
+        console.error(`❌ ${error.message}`)
+        await writeErrorToFile(
+          sourceDir,
+          'playlists',
+          filePath,
+          error,
+          processedPlaylist
+        )
+        throw error
+      }
+      // Check if playlist already exists to determine if we need to generate a slug
+      const existingPlaylist = await prismaApiMedia.playlist.findUnique({
+        where: { id: processedPlaylist.id },
+      })
+
+      const slug = existingPlaylist?.slug || (await generateUniqueSlug())
+
+      const playListToCreate: PrismaApiMedia.PlaylistCreateInput = {
+        id: processedPlaylist.id,
+        name: processedPlaylist.name,
+        note: processedPlaylist.note,
+        noteUpdatedAt: processedPlaylist.noteModifiedAt,
+        ownerId: relatedUser.coreId,
+        createdAt: processedPlaylist.createdAt,
+        updatedAt: processedPlaylist.updatedAt,
+        slug,
+      }
+
+      const playListToUpdate: PrismaApiMedia.PlaylistUpdateInput = {
+        name: processedPlaylist.name,
+        note: processedPlaylist.note,
+        noteUpdatedAt: processedPlaylist.noteModifiedAt,
+        ownerId: relatedUser.coreId,
+        updatedAt: processedPlaylist.updatedAt,
+        // Don't update slug or createdAt on existing playlists
+      }
+
+      await prismaApiMedia.playlist.upsert({
+        where: { id: processedPlaylist.id },
+        update: playListToUpdate,
+        create: playListToCreate,
+      })
+
+      // Save playlist items
+      if (processedPlaylist.items.length > 0) {
+        const savedItems: ProcessedPlaylistItem[] = []
+        const skippedItems: ProcessedPlaylistItem[] = []
+
+        for (const item of processedPlaylist.items) {
+          try {
+            const videoVariant = await prismaApiMedia.videoVariant.findUnique({
+              where: {
+                languageId_videoId: {
+                  languageId: item.languageId.toString(),
+                  videoId: item.mediaComponentId,
+                },
+              },
+            })
+            if (!videoVariant) {
+              console.warn(
+                `⚠️ VideoVariant not found for mediaComponentId: ${item.mediaComponentId} (playlist: ${processedPlaylist.name})`
+              )
+              const error = new Error(
+                `VideoVariant not found for mediaComponentId: ${item.mediaComponentId}`
+              )
+              const errorFilePath = `${processedPlaylist.id}-${item.order}-${item.mediaComponentId}.json`
+              await writeErrorToFile(
+                sourceDir,
+                'playListItems',
+                errorFilePath,
+                error,
+                {
+                  playlistId: processedPlaylist.id,
+                  playlistName: processedPlaylist.name,
+                  item,
+                }
+              )
+              skippedItems.push(item)
+              continue
+            }
+
+            // Check if playlist item already exists (by playlistId and order)
+            const existingItem = await prismaApiMedia.playlistItem.findUnique({
+              where: {
+                playlistId_order: {
+                  playlistId: processedPlaylist.id,
+                  order: item.order,
+                },
+              },
+            })
+
+            // Use existing ID if found, otherwise generate new one
+            const itemId = existingItem?.id || uuidv4()
+
+            // Upsert playlist item
+            const playlistItemToSave: PrismaApiMedia.PlaylistItemCreateInput = {
+              id: itemId,
+              order: item.order,
+              createdAt: item.createdAt,
+              updatedAt: item.updatedAt,
+              Playlist: {
+                connect: { id: processedPlaylist.id },
+              },
+              VideoVariant: {
+                connect: { id: videoVariant.id },
+              },
+            }
+
+            await prismaApiMedia.playlistItem.upsert({
+              where: { id: itemId },
+              update: {
+                order: item.order,
+                updatedAt: item.updatedAt,
+                VideoVariant: {
+                  connect: { id: videoVariant.id },
+                },
+              },
+              create: playlistItemToSave,
+            })
+            savedItems.push(item)
+          } catch (itemError) {
+            console.error(
+              `❌ Error saving playlist item for mediaComponentId ${item.mediaComponentId}:`,
+              itemError
+            )
+            const errorFilePath = `${processedPlaylist.id}-${item.order}-${item.mediaComponentId}.json`
+            await writeErrorToFile(
+              sourceDir,
+              'playListItems',
+              errorFilePath,
+              itemError,
+              {
+                playlistId: processedPlaylist.id,
+                playlistName: processedPlaylist.name,
+                item,
+              }
+            )
+            skippedItems.push(item)
+          }
+        }
+
+        // Update processedPlaylist with saved and skipped items
+        processedPlaylist.savedItems = savedItems
+        processedPlaylist.skippedItems = skippedItems
+
+        console.log(
+          `  📝 Saved ${savedItems.length} playlist items, skipped ${skippedItems.length}`
+        )
+      }
+    } catch (error) {
+      console.error(`❌ Error saving playlist to local database:`, error)
+      await writeErrorToFile(
+        sourceDir,
+        'playlists',
+        filePath,
+        error,
+        processedPlaylist
       )
       return null
     }
@@ -136,6 +406,15 @@ async function processPlaylistFile(
     return processedPlaylist
   } catch (error) {
     console.error(`❌ Error processing playlist file ${filePath}:`, error)
+    // Try to read rawData if available, otherwise use undefined
+    let rawData: unknown
+    try {
+      const fileContent = await fs.readFile(filePath, 'utf8')
+      rawData = JSON.parse(fileContent)
+    } catch {
+      rawData = undefined
+    }
+    await writeErrorToFile(sourceDir, 'playlists', filePath, error, rawData)
     return null
   }
 }
@@ -143,13 +422,30 @@ async function processPlaylistFile(
 /**
  * Get all playlist JSON files from the playlist directory
  * @param playlistDir Path to the playlist directory
+ * @param fileName Optional specific file name to filter by
  * @returns Array of file paths
  */
-async function getPlaylistFiles(playlistDir: string): Promise<string[]> {
+async function getPlaylistFiles(
+  playlistDir: string,
+  fileName?: string
+): Promise<string[]> {
   try {
+    // Normalize fileName - ensure it has .json extension if provided
+    const normalizedFileName = fileName
+      ? fileName.endsWith('.json')
+        ? fileName
+        : `${fileName}.json`
+      : undefined
+
     const files = await fs.readdir(playlistDir)
     return files
-      .filter(file => file.endsWith('.json'))
+      .filter(file => {
+        if (!file.endsWith('.json')) return false
+        if (normalizedFileName) {
+          return file === normalizedFileName
+        }
+        return true
+      })
       .map(file => path.join(playlistDir, file))
   } catch (error) {
     console.error(`❌ Error reading playlist directory ${playlistDir}:`, error)
@@ -164,6 +460,8 @@ async function getPlaylistFiles(playlistDir: string): Promise<string[]> {
  */
 function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
   totalItems: number
+  totalSavedItems: number
+  totalSkippedItems: number
   uniqueMediaComponents: Set<string>
   languageDistribution: Map<number, number>
   averageItemsPerPlaylist: number
@@ -171,9 +469,13 @@ function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
   const uniqueMediaComponents = new Set<string>()
   const languageDistribution = new Map<number, number>()
   let totalItems = 0
+  let totalSavedItems = 0
+  let totalSkippedItems = 0
 
   for (const playlist of playlists) {
     totalItems += playlist.itemCount
+    totalSavedItems += playlist.savedItems.length
+    totalSkippedItems += playlist.skippedItems.length
 
     for (const item of playlist.items) {
       uniqueMediaComponents.add(item.mediaComponentId)
@@ -185,6 +487,8 @@ function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
 
   return {
     totalItems,
+    totalSavedItems,
+    totalSkippedItems,
     uniqueMediaComponents,
     languageDistribution,
     averageItemsPerPlaylist:
@@ -192,33 +496,53 @@ function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
   }
 }
 
+export interface PlaylistIngestionSummary {
+  successCount: number
+  errorCount: number
+  totalFiles: number
+  analysis: ReturnType<typeof analyzePlaylistItems>
+  processedPlaylists: ProcessedPlaylist[]
+}
+
 /**
  * Ingest playlists from cache directory
  * @param options Options for playlist ingestion
+ * @returns Summary of playlist ingestion
  */
 export async function ingestPlaylists(
-  options: { sourceDir?: string; dryRun?: boolean } = {}
-): Promise<void> {
-  const { sourceDir = './tmp', dryRun = false } = options
+  options: { sourceDir?: string; dryRun?: boolean; file?: string } = {}
+): Promise<PlaylistIngestionSummary | null> {
+  const { sourceDir = './tmp', dryRun = false, file } = options
   const playlistDir = path.join(sourceDir, 'pl')
 
   console.log('🎵 Starting playlist ingestion pipeline...')
   console.log(`📁 Source directory: ${playlistDir}`)
   console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  if (file) {
+    console.log(`📄 Processing single file: ${file}`)
+  }
+
+  // Clear errors directory at the beginning
+  await clearErrorsDirectory(sourceDir, 'playlists')
+  await clearErrorsDirectory(sourceDir, 'playListItems')
 
   // Check if playlist directory exists
   try {
     await fs.access(playlistDir)
   } catch {
     console.error(`❌ Playlist directory does not exist: ${playlistDir}`)
-    return
+    return null
   }
 
   // Get all playlist files
-  const playlistFiles = await getPlaylistFiles(playlistDir)
+  const playlistFiles = await getPlaylistFiles(playlistDir, file)
   if (playlistFiles.length === 0) {
-    console.log('ℹ️ No playlist files found in directory')
-    return
+    if (file) {
+      console.log(`ℹ️ File ${file} not found in playlist directory`)
+    } else {
+      console.log('ℹ️ No playlist files found in directory')
+    }
+    return null
   }
 
   console.log(`📊 Found ${playlistFiles.length} playlist files to process`)
@@ -229,9 +553,15 @@ export async function ingestPlaylists(
   let errorCount = 0
 
   for (const filePath of playlistFiles) {
-    const processedPlaylist = await processPlaylistFile(filePath)
+    const processedPlaylist = await processPlaylistFile(
+      filePath,
+      sourceDir,
+      dryRun
+    )
     if (processedPlaylist) {
-      processedPlaylists.push(processedPlaylist)
+      if (processedPlaylist.type === 'playlist') {
+        processedPlaylists.push(processedPlaylist)
+      }
       successCount++
     } else {
       errorCount++
@@ -240,31 +570,6 @@ export async function ingestPlaylists(
 
   // Analyze playlist data
   const analysis = analyzePlaylistItems(processedPlaylists)
-
-  // Summary
-  console.log('\n📈 Playlist Ingestion Summary:')
-  console.log(`✅ Successfully processed: ${successCount} playlists`)
-  console.log(`❌ Failed to process: ${errorCount} playlists`)
-  console.log(`📊 Total files: ${playlistFiles.length}`)
-  console.log(`🎵 Total playlist items: ${analysis.totalItems}`)
-  console.log(
-    `📺 Unique media components: ${analysis.uniqueMediaComponents.size}`
-  )
-  console.log(
-    `📊 Average items per playlist: ${analysis.averageItemsPerPlaylist.toFixed(2)}`
-  )
-
-  // Language distribution
-  if (analysis.languageDistribution.size > 0) {
-    console.log('\n🌍 Language Distribution:')
-    const sortedLanguages = Array.from(analysis.languageDistribution.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5) // Show top 5 languages
-
-    for (const [languageId, count] of sortedLanguages) {
-      console.log(`  Language ${languageId}: ${count} items`)
-    }
-  }
 
   if (dryRun) {
     console.log('\n🔍 Dry run - showing sample processed playlists:')
@@ -280,5 +585,13 @@ export async function ingestPlaylists(
     // TODO: Implement actual ingestion to Core system
     console.log('\n🚀 Ready to ingest playlists to Core system')
     console.log(`📊 ${processedPlaylists.length} playlists ready for ingestion`)
+  }
+
+  return {
+    successCount,
+    errorCount,
+    totalFiles: playlistFiles.length,
+    analysis,
+    processedPlaylists,
   }
 }

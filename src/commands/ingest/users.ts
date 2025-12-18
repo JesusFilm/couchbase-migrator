@@ -7,45 +7,24 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { z } from 'zod'
+import admin from 'firebase-admin'
 import {
   prismaApiUsers,
   Prisma,
   User,
 } from '../../lib/prisma/api-users/client.js'
-
-// Zod schemas for user data validation
-const SyncDataSchema = z.object({
-  rev: z.string(),
-  sequence: z.number(),
-  recent_sequences: z.array(z.number()),
-  history: z.object({
-    revs: z.array(z.string()),
-    parents: z.array(z.number()),
-    channels: z.array(z.union([z.null(), z.array(z.string())])),
-  }),
-  channels: z.record(z.string(), z.union([z.null(), z.object({})])).optional(),
-  access: z.record(z.string(), z.record(z.string(), z.number())).optional(),
-  time_saved: z.string(),
-})
-
-const UserProfileSchema = z.object({
-  _sync: SyncDataSchema,
-  createdAt: z.string(),
-  email: z.email(),
-  homeCountry: z.string().optional(),
-  nameFirst: z.string(),
-  nameLast: z.string(),
-  notificationCountries: z.array(z.string()).optional().default([]),
-  owner: z.string(),
-  theKeyGrPersonId: z.string().optional().nullable(),
-  theKeyGuid: z.string(),
-  theKeyRelayGuid: z.string(),
-  theKeySsoGuid: z.string(),
-  type: z.literal('profile'),
-  updatedAt: z.string(),
-})
-
-type UserProfile = z.infer<typeof UserProfileSchema> & { cas: number }
+import {
+  prismaUsers,
+  User as UserLocal,
+} from '../../lib/prisma/users/client.js'
+import { v4 as uuidv4 } from 'uuid'
+import { auth } from '../../lib/firebase.js'
+import {
+  writeErrorToFile,
+  clearErrorsDirectory,
+} from '../../lib/error-handler.js'
+import { env } from '../../lib/env.js'
+import { UserProfileSchema, type UserProfile, type OktaUser } from './types.js'
 
 const UserDocumentSchema = z.object({
   'JFM-profiles': UserProfileSchema,
@@ -64,7 +43,11 @@ const SKIP_CAS: number[] = [
  * @param rawData Raw JSON data from file
  * @returns Processed user data for Prisma or null if invalid
  */
-function validateAndTransformUser(rawData: unknown): UserProfile | null {
+function validateAndTransformUser(
+  rawData: unknown,
+  sourceDir: string,
+  filePath: string
+): UserProfile | null {
   try {
     // Check if user should be skipped based on cas BEFORE parsing
     let cas: number | undefined
@@ -90,11 +73,16 @@ function validateAndTransformUser(rawData: unknown): UserProfile | null {
         parseResult.error.issues,
         cas
       )
+      writeErrorToFile(sourceDir, 'users', filePath, parseResult.error, rawData)
       return null
     }
 
+    const userProfile = parseResult.data['JFM-profiles']
+
+    // Normalize email to lowercase for consistent database lookups
     return {
-      ...parseResult.data['JFM-profiles'],
+      ...userProfile,
+      email: userProfile.email.toLowerCase(),
       cas: parseResult.data.cas,
     }
   } catch (error) {
@@ -106,65 +94,352 @@ function validateAndTransformUser(rawData: unknown): UserProfile | null {
 /**
  * Process a single user JSON file
  * @param filePath Path to the user JSON file
+ * @param sourceDir Base source directory for error files
+ * @param dryRun Whether this is a dry run
  * @returns Processed user data or null if processing failed
  */
 async function processUserFile(
   filePath: string,
+  sourceDir: string,
   dryRun: boolean
-): Promise<User | null> {
+): Promise<User | UserLocal | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
     const rawData = JSON.parse(fileContent)
 
-    const userData = validateAndTransformUser(rawData)
+    const userData = validateAndTransformUser(rawData, sourceDir, filePath)
     if (!userData) {
       console.log(`⏭️ Skipping invalid user file: ${filePath}`)
       return null
     }
 
     if (dryRun) {
-      console.log(`⏭️ Skipping user ${userData.theKeySsoGuid} in dry run`)
+      console.log(`⏭️ Skipping user ${userData.email} in dry run`)
+      return null
+    }
+
+    // Check if user already exists in local database
+    // check by SSO GUID since it is unique
+    const existingLocalUser = await prismaUsers.user.findUnique({
+      where: {
+        ssoGuid: userData.theKeySsoGuid,
+      },
+    })
+    if (existingLocalUser) {
+      console.log(
+        `✅ User with ssoGuid ${userData.theKeySsoGuid} and email ${userData.email} already exists in local database`
+      )
+      return existingLocalUser
+    }
+
+    // Fetch user from Okta API by SSO GUID
+    let oktaUserData
+
+    try {
+      const filterExpression = `profile.theKeyGuid eq "${userData.theKeySsoGuid.trim()}"`
+      const oktaResponse = await fetch(
+        `https://signon.okta.com/api/v1/users?search=${encodeURIComponent(filterExpression)}`,
+        {
+          headers: {
+            Authorization: `SSWS ${env.OKTA_TOKEN}`,
+            Accept: 'application/json',
+          },
+        }
+      )
+
+      if (!oktaResponse.ok) {
+        if (oktaResponse.status === 404) {
+          console.warn(
+            `⚠️ User with email ${userData.email} and ssoGuid ${userData.theKeySsoGuid} not found in Okta`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            oktaResponse.status,
+            userData
+          )
+          return null
+        } else {
+          const errorText = await oktaResponse.text()
+          console.error(
+            `❌ Okta API error (${oktaResponse.status}) for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}: ${errorText}`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            oktaResponse.status,
+            userData
+          )
+          return null
+        }
+      } else {
+        // Read response body once - filter endpoint returns an array
+        const responseData = (await oktaResponse.json()) as OktaUser[]
+
+        if (!responseData || responseData.length === 0) {
+          console.warn(`⚠️ No users found in Okta for email ${userData.email}`)
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            new Error(
+              `No users found in Okta response for email ${userData.email}: ${JSON.stringify(responseData)}`
+            ),
+            userData
+          )
+          return null
+        }
+
+        if (responseData.length > 1) {
+          console.warn(
+            `⚠️ Multiple users found in Okta for SSO GUID ${userData.theKeySsoGuid}`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            new Error('Multiple users found in Okta response'),
+            userData
+          )
+          return null
+        }
+
+        // Get the first user from the array (should only be one for exact SSO match)
+        const resData = responseData[0]
+
+        if (!resData) {
+          console.warn(
+            `⚠️ No user data in Okta response for email ${userData.email}`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            new Error('No user data in Okta response'),
+            userData
+          )
+          return null
+        }
+
+        const emails = resData.credentials?.emails
+        const primaryEmail = resData.credentials?.emails?.find(
+          email => email.type === 'PRIMARY'
+        )
+        if (!primaryEmail) {
+          console.warn(
+            `⚠️ No primary email found in Okta response for email ${userData.email}`
+          )
+          await writeErrorToFile(
+            sourceDir,
+            'users',
+            filePath,
+            new Error('No primary email found in Okta response'),
+            userData
+          )
+          return null
+        }
+        oktaUserData = {
+          id: resData.id,
+          firstName: resData.profile.firstName,
+          lastName: resData.profile.lastName,
+          status: resData.status,
+          primaryEmail: primaryEmail.value,
+          primaryEmailObject: primaryEmail,
+          theKeySsoGuid: resData.profile.theKeyGuid,
+        }
+
+        console.log(
+          `✅ Fetched Okta user data for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}:`,
+          {
+            id: oktaUserData?.id,
+            email: userData?.email,
+            status: oktaUserData?.status,
+            firstName: oktaUserData?.firstName,
+            lastName: oktaUserData?.lastName,
+            primaryEmail: oktaUserData?.primaryEmail,
+            emails: emails?.map(email => email.value),
+          }
+        )
+      }
+    } catch (error) {
+      console.error(
+        `❌ Error fetching user from Okta API for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}:`,
+        error
+      )
+      await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
+      return null
+      // Continue processing even if Okta fetch fails
+    }
+    // it shouhldn't be null but adding this to satisfy ts-lint
+    if (!oktaUserData) {
+      await writeErrorToFile(
+        sourceDir,
+        'users',
+        filePath,
+        new Error('oktaUserData object is null'),
+        userData
+      )
+      return null
+    }
+
+    // Check if user exists by email in Firebase
+    let firebaseUser: admin.auth.UserRecord | null = null
+    try {
+      try {
+        firebaseUser = await auth.getUserByEmail(oktaUserData.primaryEmail)
+        console.log(
+          `ℹ️ User with email ${userData.email} already exists in Firebase (UID: ${firebaseUser.uid})`
+        )
+        const oktaProvider = firebaseUser.providerData.find(
+          provider => provider.providerId === 'oidc.okta'
+        )
+        if (!oktaProvider) {
+          firebaseUser = await auth.updateUser(firebaseUser.uid, {
+            providerToLink: {
+              providerId: 'oidc.okta',
+              // use theKeySsoGuid from the OKTA response object because it is the correct one
+              uid: oktaUserData?.theKeySsoGuid,
+              displayName:
+                `${oktaUserData.firstName} ${oktaUserData.lastName}`.trim(),
+              email: oktaUserData.primaryEmail,
+            },
+          })
+          console.log(
+            `✅ Updated Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
+          )
+        } else {
+          console.log(`✅ User ${userData.email} already has Okta provider`)
+        }
+      } catch (error: unknown) {
+        // User doesn't exist if error code is 'auth/user-not-found'
+        const firebaseError = error as { code?: string }
+        if (firebaseError.code === 'auth/user-not-found') {
+          try {
+            firebaseUser = await auth.createUser({
+              email: oktaUserData.primaryEmail,
+              emailVerified:
+                oktaUserData.primaryEmailObject?.status === 'VERIFIED'
+                  ? true
+                  : false,
+              displayName:
+                `${oktaUserData.firstName} ${oktaUserData.lastName}`.trim(),
+              disabled: false,
+            })
+            firebaseUser = await auth.updateUser(firebaseUser.uid, {
+              providerToLink: {
+                providerId: 'oidc.okta',
+                uid: oktaUserData.theKeySsoGuid,
+                displayName:
+                  `${oktaUserData.firstName} ${oktaUserData.lastName}`.trim(),
+                email: oktaUserData.primaryEmail,
+              },
+            })
+
+            console.log(
+              `✅ Created Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
+            )
+          } catch (error) {
+            console.error(
+              `❌ Error creating Firebase user for ${userData.email}:`,
+              error
+            )
+            await writeErrorToFile(
+              sourceDir,
+              'users',
+              filePath,
+              error,
+              userData
+            )
+            return null
+          }
+        } else {
+          // Some other error occurred
+          throw error
+        }
+      }
+    } catch (error) {
+      console.error(
+        `❌ Error uploading user to firebase for user file ${filePath}:`,
+        error
+      )
+      await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
       return null
     }
 
     // Save to database using Prisma
     try {
-      const user: Prisma.UserCreateInput = {
-        id: userData.owner,
-        theKeySsoGuid: userData.theKeySsoGuid,
-        theKeyGuid: userData.theKeyGuid,
-        theKeyRelayGuid: userData.theKeyRelayGuid,
-        theKeyGrPersonId: userData.theKeyGrPersonId || null,
-        email: userData.email,
-        nameFirst: userData.nameFirst,
-        nameLast: userData.nameLast,
-        homeCountry: userData.homeCountry || null,
-        notificationCountries: userData.notificationCountries.join(','),
-        createdAt: new Date(userData.createdAt),
-        updatedAt: new Date(userData.updatedAt),
-        cas: BigInt(userData.cas),
-        syncRev: userData._sync.rev,
-        syncSequence: userData._sync.sequence,
-        syncRecentSequences: userData._sync.recent_sequences.join(','),
-        syncTimeSaved: userData._sync.time_saved,
-        ingestedAt: new Date(),
+      if (!firebaseUser.email) {
+        const error = new Error(
+          `Firebase user dooes not have email for:  ${userData.email}`
+        )
+        console.error(`❌ ${error.message}`)
+        await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
+        return null
       }
 
-      const savedUser = await prismaApiUsers.user.upsert({
-        where: { id: userData.owner },
-        update: user,
-        create: user,
+      // Check if user already exists (use lowercase for consistent lookups)
+      const existingUser = await prismaApiUsers.user.findFirst({
+        where: {
+          email: firebaseUser.email.toLowerCase(),
+        },
       })
 
-      console.log(`✅ Saved user ${userData.owner}`)
+      let userSavedToCore: User
 
-      return savedUser
+      if (existingUser) {
+        console.log(
+          `✅ User ${firebaseUser.email} already exists in core database`
+        )
+        userSavedToCore = existingUser
+      } else {
+        // User doesn't exist, create (use lowercase email)
+        const user: Prisma.UserCreateInput = {
+          id: uuidv4(),
+          userId: firebaseUser.uid,
+          firstName: firebaseUser.displayName?.split(' ')[0] ?? '',
+          lastName: firebaseUser.displayName?.split(' ')[1] ?? '',
+          email: firebaseUser.email.toLowerCase(),
+          emailVerified: firebaseUser.emailVerified,
+          superAdmin: false,
+        }
+
+        userSavedToCore = await prismaApiUsers.user.create({
+          data: user,
+        })
+        console.log(`✅ Created user ${firebaseUser.email} in core database`)
+      }
+
+      const userToSaveToLocal = {
+        ownerId: userData.owner,
+        email: firebaseUser.email.toLowerCase(),
+        ssoGuid: oktaUserData.theKeySsoGuid,
+        coreId: userSavedToCore.id,
+      }
+
+      await prismaUsers.user.create({
+        data: userToSaveToLocal,
+      })
+      console.log(`✅ Saved user ${firebaseUser.email} to local database`)
+
+      return userSavedToCore
     } catch (dbError) {
       console.error(`❌ Database error for user ${userData.owner}:`, dbError)
+      await writeErrorToFile(sourceDir, 'users', filePath, dbError, userData)
       return null
     }
   } catch (error) {
     console.error(`❌ Error processing user file ${filePath}:`, error)
+    // Try to read rawData if available, otherwise use undefined
+    let rawData: unknown
+    try {
+      const fileContent = await fs.readFile(filePath, 'utf8')
+      rawData = JSON.parse(fileContent)
+    } catch {
+      rawData = undefined
+    }
+    await writeErrorToFile(sourceDir, 'users', filePath, error, rawData)
     return null
   }
 }
@@ -172,18 +447,35 @@ async function processUserFile(
 /**
  * Get all user JSON files from both user directories
  * @param sourceDir Base source directory
+ * @param fileName Optional specific file name to filter by
  * @returns Array of file paths
  */
-async function getUserFiles(sourceDir: string): Promise<string[]> {
+async function getUserFiles(
+  sourceDir: string,
+  fileName?: string
+): Promise<string[]> {
   const userDirs = ['user', 'u']
   const allFiles: string[] = []
+
+  // Normalize fileName - ensure it has .json extension if provided
+  const normalizedFileName = fileName
+    ? fileName.endsWith('.json')
+      ? fileName
+      : `${fileName}.json`
+    : undefined
 
   for (const userDir of userDirs) {
     const fullPath = path.join(sourceDir, userDir)
     try {
       const files = await fs.readdir(fullPath)
       const jsonFiles = files
-        .filter(file => file.endsWith('.json'))
+        .filter(file => {
+          if (!file.endsWith('.json')) return false
+          if (normalizedFileName) {
+            return file === normalizedFileName
+          }
+          return true
+        })
         .map(file => path.join(fullPath, file))
       allFiles.push(...jsonFiles)
     } catch (error) {
@@ -195,35 +487,53 @@ async function getUserFiles(sourceDir: string): Promise<string[]> {
   return allFiles
 }
 
+export interface UserIngestionSummary {
+  successCount: number
+  errorCount: number
+  totalFiles: number
+  processedUsers: (User | UserLocal)[]
+}
+
 /**
  * Ingest users from cache directory
  * @param options Options for user ingestion
+ * @returns Summary of user ingestion
  */
 export async function ingestUsers(
-  options: { sourceDir?: string; dryRun?: boolean } = {}
-): Promise<void> {
-  const { sourceDir = './tmp', dryRun = false } = options
+  options: { sourceDir?: string; dryRun?: boolean; file?: string } = {}
+): Promise<UserIngestionSummary | null> {
+  const { sourceDir = './tmp', dryRun = false, file } = options
 
   console.log('👥 Starting user ingestion pipeline...')
   console.log(`📁 Source directory: ${sourceDir}`)
   console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  if (file) {
+    console.log(`📄 Processing single file: ${file}`)
+  }
+
+  // Clear errors directory at the beginning
+  await clearErrorsDirectory(sourceDir, 'users')
 
   // Get all user files from both user and u directories
-  const userFiles = await getUserFiles(sourceDir)
+  const userFiles = await getUserFiles(sourceDir, file)
   if (userFiles.length === 0) {
-    console.log('ℹ️ No user files found in user/ or u/ directories')
-    return
+    if (file) {
+      console.log(`ℹ️ File ${file} not found in user/ or u/ directories`)
+    } else {
+      console.log('ℹ️ No user files found in user/ or u/ directories')
+    }
+    return null
   }
 
   console.log(`📊 Found ${userFiles.length} user files to process`)
 
   // Process each user file
-  const processedUsers: any[] = []
+  const processedUsers: (User | UserLocal)[] = []
   let successCount = 0
   let errorCount = 0
 
   for (const filePath of userFiles) {
-    const processedUser = await processUserFile(filePath, dryRun)
+    const processedUser = await processUserFile(filePath, sourceDir, dryRun)
     if (processedUser) {
       processedUsers.push(processedUser)
       successCount++
@@ -232,20 +542,24 @@ export async function ingestUsers(
     }
   }
 
-  // Summary
-  console.log('\n📈 User Ingestion Summary:')
-  console.log(`✅ Successfully processed: ${successCount} users`)
-  console.log(`❌ Failed to process: ${errorCount} users`)
-  console.log(`📊 Total files: ${userFiles.length}`)
-
   if (dryRun) {
     console.log('\n🔍 Dry run - showing sample processed users:')
     processedUsers.slice(0, 3).forEach((user, index) => {
       console.log(`\nUser ${index + 1}:`)
-      console.log(`  Name: ${user.nameFirst} ${user.nameLast}`)
+      if ('firstName' in user && 'lastName' in user) {
+        console.log(`  Name: ${user.firstName} ${user.lastName ?? ''}`)
+      }
       console.log(`  Email: ${user.email}`)
-      console.log(`  Country: ${user.homeCountry}`)
-      console.log(`  SSO GUID: ${user.theKeySsoGuid}`)
+      if ('userId' in user) {
+        console.log(`  User ID: ${user.userId}`)
+      }
     })
+  }
+
+  return {
+    successCount,
+    errorCount,
+    totalFiles: userFiles.length,
+    processedUsers,
   }
 }

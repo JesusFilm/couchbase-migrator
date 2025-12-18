@@ -1,6 +1,7 @@
 generator apiMediaClient {
-  provider = "prisma-client-js"
-  output   = "../../src/lib/prisma/api-media/__generated__"
+  provider      = "prisma-client-js"
+  output        = "../../src/lib/prisma/api-media/__generated__"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "darwin-arm64"]
 }
 
 datasource db {

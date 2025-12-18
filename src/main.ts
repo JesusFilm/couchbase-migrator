@@ -9,6 +9,7 @@
 import { Command } from 'commander'
 import { buildCache } from './commands/buildCache.js'
 import { ingest } from './commands/ingest.js'
+import { resetFirebase } from './commands/resetFirebase.js'
 
 // Create commander program
 const program = new Command()
@@ -49,10 +50,34 @@ program
     'specify which pipeline to run: users, playlists, or all',
     'all'
   )
+  .option(
+    '--file <name>',
+    'specify a single file to ingest (only works with --pipeline users or --pipeline playlists)'
+  )
   .option('--dry-run', 'perform a dry run without actually ingesting data')
   .action(async options => {
     try {
       await ingest(options)
+    } catch (error) {
+      console.error('❌ Fatal error:', error)
+      process.exit(1)
+    }
+  })
+
+// Reset Firebase subcommand
+program
+  .command('reset:firebase')
+  .description(
+    'Batch delete all Firebase users by email from cached files in tmp/u'
+  )
+  .option(
+    '--source-dir <path>',
+    'source directory for cached user files',
+    './tmp'
+  )
+  .action(async options => {
+    try {
+      await resetFirebase(options.sourceDir)
     } catch (error) {
       console.error('❌ Fatal error:', error)
       process.exit(1)
