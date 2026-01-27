@@ -77,15 +77,15 @@ model CloudflareImage {
 model CloudflareR2 {
   id                                                   String                 @id
   fileName                                             String
-  originalFilename                                     String?
   uploadUrl                                            String?
   userId                                               String
   publicUrl                                            String?
   videoId                                              String?
-  contentType                                          String                 @default("application/octet-stream")
-  contentLength                                        BigInt                 @default(0)
   createdAt                                            DateTime               @default(now())
   updatedAt                                            DateTime               @default(now())
+  contentLength                                        BigInt                 @default(0)
+  contentType                                          String                 @default("application/octet-stream")
+  originalFilename                                     String?
   Video                                                Video?                 @relation(fields: [videoId], references: [id])
   VideoSubtitle_VideoSubtitle_srtAssetIdToCloudflareR2 VideoSubtitle?         @relation("VideoSubtitle_srtAssetIdToCloudflareR2")
   VideoSubtitle_VideoSubtitle_vttAssetIdToCloudflareR2 VideoSubtitle?         @relation("VideoSubtitle_vttAssetIdToCloudflareR2")
@@ -125,17 +125,17 @@ model MuxSubtitleTrack {
 
 model MuxVideo {
   id               String             @id
-  playbackId       String?            @unique
   uploadUrl        String?
-  uploadId         String?            @unique
-  assetId          String?            @unique
   userId           String
   name             String?
-  duration         Int                @default(0)
   downloadable     Boolean            @default(false)
   createdAt        DateTime           @default(now())
   readyToStream    Boolean            @default(false)
   updatedAt        DateTime           @default(now())
+  assetId          String?            @unique
+  duration         Int                @default(0)
+  playbackId       String?            @unique
+  uploadId         String?            @unique
   MuxSubtitleTrack MuxSubtitleTrack[]
   VideoVariant     VideoVariant[]
 
@@ -281,12 +281,12 @@ model Video {
   id                        String               @id
   label                     VideoLabel
   primaryLanguageId         String
-  published                 Boolean              @default(true)
   slug                      String?              @unique
   noIndex                   Boolean?
   childIds                  String[]
-  locked                    Boolean              @default(false)
+  published                 Boolean              @default(true)
   availableLanguages        String[]
+  locked                    Boolean              @default(false)
   originId                  String?
   restrictDownloadPlatforms Platform[]           @default([])
   restrictViewPlatforms     Platform[]           @default([])
@@ -395,14 +395,14 @@ model VideoSubtitle {
   id                                                  String        @id
   videoId                                             String
   edition                                             String        @default("base")
-  vttAssetId                                          String?       @unique
   vttSrc                                              String?
-  vttVersion                                          Int           @default(1)
-  srtAssetId                                          String?       @unique
   srtSrc                                              String?
-  srtVersion                                          Int           @default(1)
   primary                                             Boolean
   languageId                                          String
+  srtAssetId                                          String?       @unique
+  srtVersion                                          Int           @default(1)
+  vttAssetId                                          String?       @unique
+  vttVersion                                          Int           @default(1)
   VideoEdition                                        VideoEdition  @relation(fields: [edition, videoId], references: [name, videoId])
   CloudflareR2_VideoSubtitle_srtAssetIdToCloudflareR2 CloudflareR2? @relation("VideoSubtitle_srtAssetIdToCloudflareR2", fields: [srtAssetId], references: [id])
   Video                                               Video         @relation(fields: [videoId], references: [id], onDelete: Cascade)
@@ -433,22 +433,22 @@ model VideoTitle {
 model VideoVariant {
   id                   String                 @id
   hls                  String?
-  dash                 String?
-  share                String?
-  downloadable         Boolean                @default(true)
   duration             Int?
-  lengthInMilliseconds Int?
   languageId           String
-  masterUrl            String?
-  masterWidth          Int?
-  masterHeight         Int?
-  published            Boolean                @default(true)
-  version              Int                    @default(1)
   edition              String                 @default("base")
   slug                 String                 @unique
   videoId              String
-  assetId              String?                @unique
+  dash                 String?
+  share                String?
+  downloadable         Boolean                @default(true)
+  lengthInMilliseconds Int?
+  published            Boolean                @default(true)
   muxVideoId           String?
+  masterHeight         Int?
+  masterUrl            String?
+  masterWidth          Int?
+  assetId              String?                @unique
+  version              Int                    @default(1)
   brightcoveId         String?
   PlaylistItem         PlaylistItem[]
   CloudflareR2         CloudflareR2?          @relation(fields: [assetId], references: [id])
@@ -466,12 +466,12 @@ model VideoVariantDownload {
   id             String                      @id
   quality        VideoVariantDownloadQuality
   size           Float?
+  url            String
+  videoVariantId String?
   height         Int?
   width          Int?
-  version        Int                         @default(1)
-  url            String
   assetId        String?
-  videoVariantId String?
+  version        Int                         @default(1)
   bitrate        Int?
   CloudflareR2   CloudflareR2?               @relation(fields: [assetId], references: [id])
   VideoVariant   VideoVariant?               @relation(fields: [videoVariantId], references: [id], onDelete: Cascade)
