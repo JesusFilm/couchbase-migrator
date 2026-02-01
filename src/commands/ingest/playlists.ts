@@ -343,7 +343,12 @@ async function processPlaylistFile(
                 connect: { id: processedPlaylist.id },
               },
               VideoVariant: {
-                connect: { id: videoVariant.id },
+                connect: {
+                  languageId_videoId: {
+                    languageId: videoVariant.languageId,
+                    videoId: videoVariant.videoId,
+                  },
+                },
               },
             }
 
@@ -462,12 +467,15 @@ function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
   totalItems: number
   totalSavedItems: number
   totalSkippedItems: number
+  totalItemsNotProcessed: number
+  videoVariantsNotFound: number
   uniqueMediaComponents: Set<string>
   languageDistribution: Map<number, number>
   averageItemsPerPlaylist: number
 } {
   const uniqueMediaComponents = new Set<string>()
   const languageDistribution = new Map<number, number>()
+  const uniqueSkippedVideoVariants = new Set<string>()
   let totalItems = 0
   let totalSavedItems = 0
   let totalSkippedItems = 0
@@ -476,6 +484,12 @@ function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
     totalItems += playlist.itemCount
     totalSavedItems += playlist.savedItems.length
     totalSkippedItems += playlist.skippedItems.length
+
+    for (const item of playlist.skippedItems) {
+      uniqueSkippedVideoVariants.add(
+        `${item.mediaComponentId}-${item.languageId}`
+      )
+    }
 
     for (const item of playlist.items) {
       uniqueMediaComponents.add(item.mediaComponentId)
@@ -489,6 +503,8 @@ function analyzePlaylistItems(playlists: ProcessedPlaylist[]): {
     totalItems,
     totalSavedItems,
     totalSkippedItems,
+    totalItemsNotProcessed: 0,
+    videoVariantsNotFound: uniqueSkippedVideoVariants.size,
     uniqueMediaComponents,
     languageDistribution,
     averageItemsPerPlaylist:
@@ -502,6 +518,8 @@ export interface PlaylistIngestionSummary {
   totalFiles: number
   analysis: ReturnType<typeof analyzePlaylistItems>
   processedPlaylists: ProcessedPlaylist[]
+  /** Count of unique VideoVariants that were not found when saving playlist items */
+  videoVariantsNotFound: number
 }
 
 /**
@@ -593,5 +611,6 @@ export async function ingestPlaylists(
     totalFiles: playlistFiles.length,
     analysis,
     processedPlaylists,
+    videoVariantsNotFound: analysis.videoVariantsNotFound,
   }
 }
