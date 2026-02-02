@@ -8,48 +8,8 @@ services:
       - ..:/workspace
     working_dir: /workspace
     command: sleep infinity
-    depends_on:
-      - postgres-api-users
-      - postgres-api-media
-    environment:
-      - PRISMA_API_USERS_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-api-users:5432/users
-      - PRISMA_API_MEDIA_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-api-media:5432/media
-
-  postgres-api-users:
-    image: postgres:16
-    platform: linux/amd64
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: users
-    ports:
-      - "5434:5432"
-    volumes:
-      - postgres-api-users-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  postgres-api-media:
-    image: postgres:16
-    platform: linux/amd64
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: media
-    ports:
-      - "5435:5432"
-    volumes:
-      - postgres-api-media-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-volumes:
-  postgres-api-users-data:
-  postgres-api-media-data:
-
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun

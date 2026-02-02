@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 mcr.microsoft.com/devcontainers/javascript-node:1-20-bookworm
+FROM --platform=linux/amd64 mcr.microsoft.com/devcontainers/javascript-node:1-18-bookworm
 
 # Install pnpm
 RUN npm install -g pnpm@10.15.1
