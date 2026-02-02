@@ -1,0 +1,19 @@
+FROM --platform=linux/amd64 mcr.microsoft.com/devcontainers/javascript-node:1-18-bookworm
+
+# Install pnpm
+RUN npm install -g pnpm@10.15.1
+
+# Install Cloudflare WARP client
+RUN curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && \
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list && \
+    apt-get update && \
+    apt-get install -y cloudflare-warp && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /workspace
+
+# Keep container running
+CMD ["sleep", "infinity"]
+

@@ -5,6 +5,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+.pnpm-store
 
 # Runtime data
 pids
@@ -253,4 +254,9 @@ coverage/
 *.couchbase
 .couchbase/
 
+#prisma generated files
+src/lib/prisma/*/__generated__/
+
+
 /src/__generated__/prisma
+nohup.out

@@ -1,0 +1,24 @@
+generator usersClient {
+  provider      = "prisma-client-js"
+  output        = "../../src/lib/prisma/users/__generated__"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "darwin-arm64"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("PRISMA_USERS_URL")
+}
+
+// Add your models here
+model User {
+  ownerId String @id
+  email String @unique
+  ssoGuid String @unique
+  coreId String @unique
+
+  @@index([email])
+  @@index([ssoGuid])
+  @@index([coreId])
+
+  @@unique([ownerId, email, ssoGuid, coreId])
+}

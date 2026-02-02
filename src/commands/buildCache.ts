@@ -4,30 +4,60 @@
  * Handles building the document cache by migrating documents from Couchbase
  */
 
-import { client } from '../lib/couchbase.js'
-import { getDocuments } from '../lib/document-processor.js'
+import cliProgress from 'cli-progress'
+import { getClient } from '../lib/couchbase.js'
+import { getDocuments, getDocumentCount } from '../lib/document-processor.js'
+import { Logger } from '../lib/logger.js'
 
 /**
  * Build cache by migrating all documents from Couchbase
  * @param options Options for cache building
  */
 export async function buildCache(
-  options: { skipAttachments?: boolean } = {}
+  options: { skipAttachments?: boolean; debug?: boolean } = {}
 ): Promise<void> {
-  try {
-    const { skipAttachments = false } = options
+  const { skipAttachments = true, debug = false } = options
+  const logger = new Logger(debug)
 
+  let progressBar: cliProgress.SingleBar | null = null
+
+  const client = getClient({ debug })
+
+  try {
     await client.connect()
 
-    console.log('✨ Migration framework ready!')
+    logger.log('✨ Migration framework ready!')
     if (skipAttachments) {
-      console.log(
+      logger.log(
         '⏭️ Skipping binary attachments - processing JSON documents only'
       )
     }
 
+    // Get total document count for progress bar
+    logger.info('📊 Getting total document count...')
+    const totalDocuments = await getDocumentCount(
+      client,
+      logger,
+      skipAttachments
+    )
+    logger.info(`📊 Found ${totalDocuments} documents to process`)
+
     // Paginate through all documents
-    console.log('\n📄 Starting full document migration...')
+    if (debug) {
+      logger.log('\n📄 Starting full document migration...')
+    } else {
+      progressBar = new cliProgress.SingleBar(
+        {
+          format:
+            '📄 Building cache |{bar}| {percentage}% | {value}/{total} documents | Elapsed: {duration_formatted} | ETA: {eta_formatted}',
+          barCompleteChar: '\u2588',
+          barIncompleteChar: '\u2591',
+          hideCursor: true,
+        },
+        cliProgress.Presets.shades_classic
+      )
+      progressBar.start(totalDocuments, 0)
+    }
 
     let offset = 0
     const limit = 1000
@@ -36,8 +66,8 @@ export async function buildCache(
     let pageNumber = 1
 
     while (true) {
-      console.log(`\n📄 Processing page ${pageNumber} (offset: ${offset})...`)
-      const paginationResult = await getDocuments(client, {
+      logger.log(`\n📄 Processing page ${pageNumber} (offset: ${offset})...`)
+      const paginationResult = await getDocuments(client, logger, {
         offset,
         limit,
         skipAttachments,
@@ -48,17 +78,25 @@ export async function buildCache(
       totalProcessed += paginationResult.documentsProcessed
       totalSkipped += paginationResult.documentsSkipped
 
-      console.log(`📋 Retrieved ${documentsInPage} documents in this page`)
-      console.log(`✅ Processed: ${paginationResult.documentsProcessed}`)
-      console.log(`⏭️ Skipped: ${paginationResult.documentsSkipped}`)
-      console.log(`🔄 Has more pages: ${paginationResult.hasMore}`)
+      const total = totalProcessed + totalSkipped
+
+      if (progressBar) {
+        progressBar.update(total, {
+          value: total,
+        })
+      }
+
+      logger.log(`📋 Retrieved ${documentsInPage} documents in this page`)
+      logger.log(`✅ Processed: ${paginationResult.documentsProcessed}`)
+      logger.log(`⏭️ Skipped: ${paginationResult.documentsSkipped}`)
+      logger.log(`🔄 Has more pages: ${paginationResult.hasMore}`)
 
       if (documentsInPage > 0) {
-        console.log(
+        logger.log(
           `✅ Successfully processed ${paginationResult.documentsProcessed} documents in page ${pageNumber}`
         )
       } else {
-        console.log(`ℹ️ No documents found in page ${pageNumber}`)
+        logger.log(`ℹ️ No documents found in page ${pageNumber}`)
       }
 
       // Update offset for next page
@@ -67,7 +105,10 @@ export async function buildCache(
 
       // Check if we should continue
       if (!paginationResult.hasMore) {
-        console.log('\n🏁 No more pages available - migration complete!')
+        if (progressBar) {
+          progressBar.stop()
+        }
+        logger.log('\n🏁 No more pages available - migration complete!')
         break
       }
 
@@ -76,19 +117,22 @@ export async function buildCache(
     }
 
     // Final statistics
-    console.log('\n📊 Migration Summary:')
-    console.log(`📄 Total pages processed: ${pageNumber - 1}`)
-    console.log(`📋 Total documents found: ${totalProcessed + totalSkipped}`)
-    console.log(`✅ Total documents processed: ${totalProcessed}`)
-    console.log(`⏭️ Total documents skipped (already existed): ${totalSkipped}`)
+    logger.info('\n📊 Migration Summary:')
+    logger.info(`📄 Total pages processed: ${pageNumber - 1}`)
+    logger.info(`📋 Total documents found: ${totalProcessed + totalSkipped}`)
+    logger.info(`✅ Total documents processed: ${totalProcessed}`)
+    logger.info(`⏭️ Total documents skipped (already existed): ${totalSkipped}`)
   } catch (error) {
-    console.error('❌ Error during Couchbase operations:', error)
+    if (progressBar) {
+      progressBar.stop()
+    }
+    logger.error('❌ Error during Couchbase operations:', error)
     throw error
   } finally {
     try {
       await client.disconnect()
     } catch (disconnectError) {
-      console.error('❌ Error disconnecting:', disconnectError)
+      logger.error('❌ Error disconnecting:', disconnectError)
     }
   }
 }
