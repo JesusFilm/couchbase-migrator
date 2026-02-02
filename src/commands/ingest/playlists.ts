@@ -603,7 +603,7 @@ export async function ingestPlaylists(
     progressBar = new cliProgress.SingleBar(
       {
         format:
-          '🎵 Ingesting playlists |{bar}| {percentage}% | {value}/{total} files | ETA: {eta}s',
+          '🎵 Ingesting playlists |{bar}| {percentage}% | {value}/{total} files | Elapsed: {duration_formatted} | ETA: {eta_formatted}',
         barCompleteChar: '\u2588',
         barIncompleteChar: '\u2591',
         hideCursor: true,

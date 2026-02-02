@@ -672,7 +672,7 @@ export async function ingestUsers(
     progressBar = new cliProgress.SingleBar(
       {
         format:
-          '👥 Ingesting users |{bar}| {percentage}% | {value}/{total} files | ETA: {eta}s',
+          '👥 Ingesting users |{bar}| {percentage}% | {value}/{total} files | Elapsed: {duration_formatted} | ETA: {eta_formatted}',
         barCompleteChar: '\u2588',
         barIncompleteChar: '\u2591',
         hideCursor: true,

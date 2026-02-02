@@ -49,7 +49,7 @@ export async function buildCache(
       progressBar = new cliProgress.SingleBar(
         {
           format:
-            '📄 Building cache |{bar}| {percentage}% | {value}/{total} documents | ETA: {eta}s',
+            '📄 Building cache |{bar}| {percentage}% | {value}/{total} documents | Elapsed: {duration_formatted} | ETA: {eta_formatted}',
           barCompleteChar: '\u2588',
           barIncompleteChar: '\u2591',
           hideCursor: true,
