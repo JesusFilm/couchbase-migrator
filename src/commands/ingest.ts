@@ -80,6 +80,14 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
 
     if (playlistSummary) {
       console.log('\n📈 Playlist Ingestion Summary:')
+      const batchLine = [
+        `✅ Batch write: ${playlistSummary.successCount} playlists`,
+        `${playlistSummary.analysis.totalSavedItems} items saved`,
+        `${playlistSummary.analysis.totalSkippedItems} items skipped`,
+        `${playlistSummary.analysis.totalItemsNotProcessed} items not processed (owner missing)`,
+        `${playlistSummary.videoVariantsNotFound} VideoVariants not found`,
+      ]
+      console.log(batchLine.join(', '))
       console.log(
         `✅ Successfully processed: ${playlistSummary.successCount} playlists`
       )
@@ -94,8 +102,23 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
         `✅ Successfully saved playlist items: ${playlistSummary.analysis.totalSavedItems}`
       )
       console.log(
-        `❌ Skipped playlist items: ${playlistSummary.analysis.totalSkippedItems}`
+        `❌ Skipped playlist items (VideoVariant not found): ${playlistSummary.analysis.totalSkippedItems}`
       )
+      console.log(
+        `❌ Skipped playlist items (playlist owner missing): ${playlistSummary.analysis.totalItemsNotProcessed}`
+      )
+      console.log(
+        `📺 VideoVariants not found: ${playlistSummary.videoVariantsNotFound}`
+      )
+      const itemsSum =
+        playlistSummary.analysis.totalSavedItems +
+        playlistSummary.analysis.totalSkippedItems +
+        playlistSummary.analysis.totalItemsNotProcessed
+      if (itemsSum !== playlistSummary.analysis.totalItems) {
+        console.warn(
+          `⚠️ Item count mismatch: total ${playlistSummary.analysis.totalItems} ≠ saved + skipped + not processed (${itemsSum})`
+        )
+      }
       console.log(
         `📺 Unique media components: ${playlistSummary.analysis.uniqueMediaComponents.size}`
       )
