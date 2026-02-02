@@ -39,6 +39,7 @@
     "@commitlint/config-conventional": "^19.6.0",
     "@eslint/js": "^9.15.0",
     "@prisma/engines": "6.19.1",
+    "@types/cli-progress": "^3.11.6",
     "@types/node": "^24.3.1",
     "@typescript-eslint/eslint-plugin": "^8.15.0",
     "@typescript-eslint/parser": "^8.15.0",
@@ -56,6 +57,7 @@
   "dependencies": {
     "@prisma/client": "6.19.1",
     "@t3-oss/env-core": "^0.13.8",
+    "cli-progress": "^3.12.0",
     "commander": "^14.0.0",
     "couchbase": "^3.2.7",
     "dotenv": "^17.2.2",

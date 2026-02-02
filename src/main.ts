@@ -9,7 +9,7 @@
 import { Command } from 'commander'
 import { buildCache } from './commands/buildCache.js'
 import { ingest } from './commands/ingest.js'
-import { resetFirebase } from './commands/resetFirebase.js'
+import { Logger } from './lib/logger.js'
 
 // Create commander program
 const program = new Command()
@@ -27,11 +27,16 @@ program
     '--skip-attachments',
     'skip processing binary attachments (only process JSON documents)'
   )
+  .option('--debug', 'show verbose debug logging (default: false)')
   .action(async options => {
+    const logger = new Logger(options.debug || false)
     try {
-      await buildCache(options)
+      await buildCache({
+        ...options,
+        debug: options.debug || false,
+      })
     } catch (error) {
-      console.error('❌ Fatal error:', error)
+      logger.error('❌ Fatal error:', error)
       process.exit(1)
     }
   })
@@ -60,36 +65,19 @@ program
     'number of files to process concurrently (default: 10)',
     '10'
   )
+  .option('--debug', 'show verbose debug logging (default: false)')
   .action(async options => {
+    const logger = new Logger(options.debug || false)
     try {
       await ingest({
         ...options,
         concurrency: options.concurrency
           ? parseInt(options.concurrency, 10)
           : undefined,
+        debug: options.debug || false,
       })
     } catch (error) {
-      console.error('❌ Fatal error:', error)
-      process.exit(1)
-    }
-  })
-
-// Reset Firebase subcommand
-program
-  .command('reset:firebase')
-  .description(
-    'Batch delete all Firebase users by email from cached files in tmp/u'
-  )
-  .option(
-    '--source-dir <path>',
-    'source directory for cached user files',
-    './tmp'
-  )
-  .action(async options => {
-    try {
-      await resetFirebase(options.sourceDir)
-    } catch (error) {
-      console.error('❌ Fatal error:', error)
+      logger.error('❌ Fatal error:', error)
       process.exit(1)
     }
   })

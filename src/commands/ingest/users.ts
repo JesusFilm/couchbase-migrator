@@ -10,13 +10,11 @@ import { z } from 'zod'
 import admin from 'firebase-admin'
 import {
   prismaApiUsers,
-  Prisma,
-  User,
+  type Prisma,
+  type User,
 } from '../../lib/prisma/api-users/client.js'
-import {
-  prismaUsers,
-  User as UserLocal,
-} from '../../lib/prisma/users/client.js'
+import { prismaUsers } from '../../lib/prisma/users/client.js'
+import type { User as UserLocal } from '../../lib/prisma/users/client.js'
 import { v4 as uuidv4 } from 'uuid'
 import { auth } from '../../lib/firebase.js'
 import {
@@ -25,6 +23,8 @@ import {
 } from '../../lib/error-handler.js'
 import { env } from '../../lib/env.js'
 import { UserProfileSchema, type UserProfile, type OktaUser } from './types.js'
+import cliProgress from 'cli-progress'
+import { Logger } from '../../lib/logger.js'
 
 const UserDocumentSchema = z.object({
   'JFM-profiles': UserProfileSchema,
@@ -43,11 +43,12 @@ const SKIP_CAS: number[] = [
  * @param rawData Raw JSON data from file
  * @returns Processed user data for Prisma or null if invalid
  */
-function validateAndTransformUser(
+async function validateAndTransformUser(
   rawData: unknown,
   sourceDir: string,
-  filePath: string
-): UserProfile | null {
+  filePath: string,
+  logger: Logger
+): Promise<UserProfile | null> {
   try {
     // Check if user should be skipped based on cas BEFORE parsing
     let cas: number | undefined
@@ -68,12 +69,19 @@ function validateAndTransformUser(
     const parseResult = UserDocumentSchema.safeParse(rawData)
 
     if (!parseResult.success) {
-      console.warn(
+      logger.warn(
         '⚠️ User document validation failed:',
         parseResult.error.issues,
         cas
       )
-      writeErrorToFile(sourceDir, 'users', filePath, parseResult.error, rawData)
+      await writeErrorToFile(
+        sourceDir,
+        'users',
+        filePath,
+        parseResult.error,
+        logger,
+        rawData
+      )
       return null
     }
 
@@ -86,7 +94,7 @@ function validateAndTransformUser(
       cas: parseResult.data.cas,
     }
   } catch (error) {
-    console.error('❌ Error validating user data:', error)
+    logger.error('❌ Error validating user data:', error)
     return null
   }
 }
@@ -100,6 +108,7 @@ function validateAndTransformUser(
  */
 async function fetchOktaWithRetry(
   fn: () => Promise<Response>,
+  logger: Logger,
   maxRetries: number = 5,
   baseDelay: number = 5000
 ): Promise<Response> {
@@ -118,7 +127,7 @@ async function fetchOktaWithRetry(
       lastResponse = response
 
       if (attempt === maxRetries) {
-        console.error(
+        logger.error(
           `❌ Okta rate limit hit after ${maxRetries} attempts. Giving up.`
         )
         return response
@@ -134,13 +143,13 @@ async function fetchOktaWithRetry(
         const now = Date.now()
         const bufferMs = 500 // 500ms buffer to ensure rate limit has reset
         delay = Math.max(0, resetTime - now + bufferMs)
-        console.warn(
+        logger.warn(
           `⚠️ Okta rate limit (429) - x-rate-limit-reset: ${rateLimitReset} (${new Date(resetTime).toISOString()}). Waiting ${delay}ms before retry ${attempt + 1}/${maxRetries}`
         )
       } else {
         // Exponential backoff: baseDelay * 2^(attempt-1)
         delay = baseDelay * Math.pow(2, attempt - 1)
-        console.warn(
+        logger.warn(
           `⚠️ Okta rate limit (429) - No x-rate-limit-reset header. Retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`
         )
       }
@@ -168,20 +177,26 @@ async function processUserFile(
   filePath: string,
   sourceDir: string,
   dryRun: boolean,
-  oktaToken: string
+  oktaToken: string,
+  logger: Logger
 ): Promise<User | UserLocal | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
     const rawData = JSON.parse(fileContent)
 
-    const userData = validateAndTransformUser(rawData, sourceDir, filePath)
+    const userData = await validateAndTransformUser(
+      rawData,
+      sourceDir,
+      filePath,
+      logger
+    )
     if (!userData) {
-      console.log(`⏭️ Skipping invalid user file: ${filePath}`)
+      logger.log(`⏭️ Skipping invalid user file: ${filePath}`)
       return null
     }
 
     if (dryRun) {
-      console.log(`⏭️ Skipping user ${userData.email} in dry run`)
+      logger.log(`⏭️ Skipping user ${userData.email} in dry run`)
       return null
     }
 
@@ -193,7 +208,7 @@ async function processUserFile(
       },
     })
     if (existingLocalUser) {
-      console.log(
+      logger.log(
         `✅ User with ssoGuid ${userData.theKeySsoGuid} and email ${userData.email} already exists in local database`
       )
       return existingLocalUser
@@ -216,13 +231,14 @@ async function processUserFile(
               },
             }
           ),
+        logger,
         5, // max retries
         5000 // base delay 5 second
       )
 
       if (!oktaResponse.ok) {
         if (oktaResponse.status === 404) {
-          console.warn(
+          logger.warn(
             `⚠️ User with email ${userData.email} and ssoGuid ${userData.theKeySsoGuid} not found in Okta`
           )
           await writeErrorToFile(
@@ -230,12 +246,13 @@ async function processUserFile(
             'users',
             filePath,
             oktaResponse.status,
+            logger,
             userData
           )
           return null
         } else {
           const errorText = await oktaResponse.text()
-          console.error(
+          logger.error(
             `❌ Okta API error (${oktaResponse.status}) for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}: ${errorText}`
           )
           await writeErrorToFile(
@@ -243,6 +260,7 @@ async function processUserFile(
             'users',
             filePath,
             oktaResponse.status,
+            logger,
             userData
           )
           return null
@@ -252,7 +270,7 @@ async function processUserFile(
         const responseData = (await oktaResponse.json()) as OktaUser[]
 
         if (!responseData || responseData.length === 0) {
-          console.warn(`⚠️ No users found in Okta for email ${userData.email}`)
+          logger.warn(`⚠️ No users found in Okta for email ${userData.email}`)
           await writeErrorToFile(
             sourceDir,
             'users',
@@ -260,13 +278,14 @@ async function processUserFile(
             new Error(
               `No users found in Okta response for email ${userData.email}: ${JSON.stringify(responseData)}`
             ),
+            logger,
             userData
           )
           return null
         }
 
         if (responseData.length > 1) {
-          console.warn(
+          logger.warn(
             `⚠️ Multiple users found in Okta for SSO GUID ${userData.theKeySsoGuid}`
           )
           await writeErrorToFile(
@@ -274,6 +293,7 @@ async function processUserFile(
             'users',
             filePath,
             new Error('Multiple users found in Okta response'),
+            logger,
             userData
           )
           return null
@@ -283,7 +303,7 @@ async function processUserFile(
         const resData = responseData[0]
 
         if (!resData) {
-          console.warn(
+          logger.warn(
             `⚠️ No user data in Okta response for email ${userData.email}`
           )
           await writeErrorToFile(
@@ -291,6 +311,7 @@ async function processUserFile(
             'users',
             filePath,
             new Error('No user data in Okta response'),
+            logger,
             userData
           )
           return null
@@ -301,7 +322,7 @@ async function processUserFile(
           email => email.type === 'PRIMARY'
         )
         if (!primaryEmail) {
-          console.warn(
+          logger.warn(
             `⚠️ No primary email found in Okta response for email ${userData.email}`
           )
           await writeErrorToFile(
@@ -309,6 +330,7 @@ async function processUserFile(
             'users',
             filePath,
             new Error('No primary email found in Okta response'),
+            logger,
             userData
           )
           return null
@@ -323,7 +345,7 @@ async function processUserFile(
           theKeySsoGuid: resData.profile.theKeyGuid,
         }
 
-        console.log(
+        logger.log(
           `✅ Fetched Okta user data for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}:`,
           {
             id: oktaUserData?.id,
@@ -337,11 +359,18 @@ async function processUserFile(
         )
       }
     } catch (error) {
-      console.error(
+      logger.error(
         `❌ Error fetching user from Okta API for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}:`,
         error
       )
-      await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
+      await writeErrorToFile(
+        sourceDir,
+        'users',
+        filePath,
+        error,
+        logger,
+        userData
+      )
       return null
       // Continue processing even if Okta fetch fails
     }
@@ -352,6 +381,7 @@ async function processUserFile(
         'users',
         filePath,
         new Error('oktaUserData object is null'),
+        logger,
         userData
       )
       return null
@@ -362,7 +392,7 @@ async function processUserFile(
     try {
       try {
         firebaseUser = await auth.getUserByEmail(oktaUserData.primaryEmail)
-        console.log(
+        logger.log(
           `ℹ️ User with email ${userData.email} already exists in Firebase (UID: ${firebaseUser.uid})`
         )
         const oktaProvider = firebaseUser.providerData.find(
@@ -379,11 +409,11 @@ async function processUserFile(
               email: oktaUserData.primaryEmail,
             },
           })
-          console.log(
+          logger.log(
             `✅ Updated Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
           )
         } else {
-          console.log(`✅ User ${userData.email} already has Okta provider`)
+          logger.log(`✅ User ${userData.email} already has Okta provider`)
         }
       } catch (error: unknown) {
         // User doesn't exist if error code is 'auth/user-not-found'
@@ -410,11 +440,11 @@ async function processUserFile(
               },
             })
 
-            console.log(
+            logger.log(
               `✅ Created Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
             )
           } catch (error) {
-            console.error(
+            logger.error(
               `❌ Error creating Firebase user for ${userData.email}:`,
               error
             )
@@ -423,6 +453,7 @@ async function processUserFile(
               'users',
               filePath,
               error,
+              logger,
               userData
             )
             return null
@@ -433,11 +464,18 @@ async function processUserFile(
         }
       }
     } catch (error) {
-      console.error(
+      logger.error(
         `❌ Error uploading user to firebase for user file ${filePath}:`,
         error
       )
-      await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
+      await writeErrorToFile(
+        sourceDir,
+        'users',
+        filePath,
+        error,
+        logger,
+        userData
+      )
       return null
     }
 
@@ -447,8 +485,15 @@ async function processUserFile(
         const error = new Error(
           `Firebase user dooes not have email for:  ${userData.email}`
         )
-        console.error(`❌ ${error.message}`)
-        await writeErrorToFile(sourceDir, 'users', filePath, error, userData)
+        logger.error(`❌ ${error.message}`)
+        await writeErrorToFile(
+          sourceDir,
+          'users',
+          filePath,
+          error,
+          logger,
+          userData
+        )
         return null
       }
 
@@ -462,7 +507,7 @@ async function processUserFile(
       let userSavedToCore: User
 
       if (existingUser) {
-        console.log(
+        logger.log(
           `✅ User ${firebaseUser.email} already exists in core database`
         )
         userSavedToCore = existingUser
@@ -481,7 +526,7 @@ async function processUserFile(
         userSavedToCore = await prismaApiUsers.user.create({
           data: user,
         })
-        console.log(`✅ Created user ${firebaseUser.email} in core database`)
+        logger.log(`✅ Created user ${firebaseUser.email} in core database`)
       }
 
       const userToSaveToLocal = {
@@ -494,16 +539,23 @@ async function processUserFile(
       await prismaUsers.user.create({
         data: userToSaveToLocal,
       })
-      console.log(`✅ Saved user ${firebaseUser.email} to local database`)
+      logger.log(`✅ Saved user ${firebaseUser.email} to local database`)
 
       return userSavedToCore
     } catch (dbError) {
-      console.error(`❌ Database error for user ${userData.owner}:`, dbError)
-      await writeErrorToFile(sourceDir, 'users', filePath, dbError, userData)
+      logger.error(`❌ Database error for user ${userData.owner}:`, dbError)
+      await writeErrorToFile(
+        sourceDir,
+        'users',
+        filePath,
+        dbError,
+        logger,
+        userData
+      )
       return null
     }
   } catch (error) {
-    console.error(`❌ Error processing user file ${filePath}:`, error)
+    logger.error(`❌ Error processing user file ${filePath}:`, error)
     // Try to read rawData if available, otherwise use undefined
     let rawData: unknown
     try {
@@ -512,7 +564,7 @@ async function processUserFile(
     } catch {
       rawData = undefined
     }
-    await writeErrorToFile(sourceDir, 'users', filePath, error, rawData)
+    await writeErrorToFile(sourceDir, 'users', filePath, error, logger, rawData)
     return null
   }
 }
@@ -525,6 +577,7 @@ async function processUserFile(
  */
 async function getUserFiles(
   sourceDir: string,
+  logger: Logger,
   fileName?: string
 ): Promise<string[]> {
   const userDirs = ['user', 'u']
@@ -552,7 +605,7 @@ async function getUserFiles(
         .map(file => path.join(fullPath, file))
       allFiles.push(...jsonFiles)
     } catch (error) {
-      console.warn(`⚠️ Could not read directory ${fullPath}:`, error)
+      logger.error(`❌ Error reading user directory ${fullPath}:`, error)
       // Continue with other directories even if one fails
     }
   }
@@ -578,6 +631,7 @@ export async function ingestUsers(
     dryRun?: boolean
     file?: string
     concurrency?: number
+    debug?: boolean
   } = {}
 ): Promise<UserIngestionSummary | null> {
   const {
@@ -585,31 +639,48 @@ export async function ingestUsers(
     dryRun = false,
     file,
     concurrency = 10,
+    debug = false,
   } = options
+  const logger = new Logger(debug)
 
-  console.log('👥 Starting user ingestion pipeline...')
-  console.log(`📁 Source directory: ${sourceDir}`)
-  console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
-  console.log(`⚡ Concurrency: ${concurrency} (balanced across 2 Okta tokens)`)
+  logger.log('👥 Starting user ingestion pipeline...')
+  logger.log(`📁 Source directory: ${sourceDir}`)
+  logger.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  logger.log(`⚡ Concurrency: ${concurrency} (balanced across 2 Okta tokens)`)
   if (file) {
-    console.log(`📄 Processing single file: ${file}`)
+    logger.log(`📄 Processing single file: ${file}`)
   }
 
   // Clear errors directory at the beginning
-  await clearErrorsDirectory(sourceDir, 'users')
+  await clearErrorsDirectory(sourceDir, 'users', logger)
 
   // Get all user files from both user and u directories
-  const userFiles = await getUserFiles(sourceDir, file)
+  const userFiles = await getUserFiles(sourceDir, logger, file)
   if (userFiles.length === 0) {
     if (file) {
-      console.log(`ℹ️ File ${file} not found in user/ or u/ directories`)
+      logger.info(`ℹ️ File ${file} not found in user/ or u/ directories`)
     } else {
-      console.log('ℹ️ No user files found in user/ or u/ directories')
+      logger.info('ℹ️ No user files found in user/ or u/ directories')
     }
     return null
   }
 
-  console.log(`📊 Found ${userFiles.length} user files to process`)
+  logger.log(`📊 Found ${userFiles.length} user files to process`)
+
+  let progressBar: cliProgress.SingleBar | null = null
+  if (!debug) {
+    progressBar = new cliProgress.SingleBar(
+      {
+        format:
+          '👥 Ingesting users |{bar}| {percentage}% | {value}/{total} files | ETA: {eta}s',
+        barCompleteChar: '\u2588',
+        barIncompleteChar: '\u2591',
+        hideCursor: true,
+      },
+      cliProgress.Presets.shades_classic
+    )
+    progressBar.start(userFiles.length, 0)
+  }
 
   // Process user files with concurrency limit, balancing between two tokens
   const processedUsers: (User | UserLocal)[] = []
@@ -626,10 +697,10 @@ export async function ingestUsers(
 
     const results = await Promise.allSettled([
       ...firstHalf.map(filePath =>
-        processUserFile(filePath, sourceDir, dryRun, env.OKTA_TOKEN)
+        processUserFile(filePath, sourceDir, dryRun, env.OKTA_TOKEN, logger)
       ),
       ...secondHalf.map(filePath =>
-        processUserFile(filePath, sourceDir, dryRun, env.OKTA_TOKEN_2)
+        processUserFile(filePath, sourceDir, dryRun, env.OKTA_TOKEN_2, logger)
       ),
     ])
 
@@ -640,19 +711,26 @@ export async function ingestUsers(
       } else {
         errorCount++
       }
+      if (progressBar) {
+        progressBar.update(successCount + errorCount)
+      }
     }
   }
 
+  if (progressBar) {
+    progressBar.stop()
+  }
+
   if (dryRun) {
-    console.log('\n🔍 Dry run - showing sample processed users:')
+    logger.info('\n🔍 Dry run - showing sample processed users:')
     processedUsers.slice(0, 3).forEach((user, index) => {
-      console.log(`\nUser ${index + 1}:`)
+      logger.info(`\nUser ${index + 1}:`)
       if ('firstName' in user && 'lastName' in user) {
-        console.log(`  Name: ${user.firstName} ${user.lastName ?? ''}`)
+        logger.info(`  Name: ${user.firstName} ${user.lastName ?? ''}`)
       }
-      console.log(`  Email: ${user.email}`)
+      logger.info(`  Email: ${user.email}`)
       if ('userId' in user) {
-        console.log(`  User ID: ${user.userId}`)
+        logger.info(`  User ID: ${user.userId}`)
       }
     })
   }

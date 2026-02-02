@@ -9,6 +9,7 @@ import {
   ingestPlaylists,
   type PlaylistIngestionSummary,
 } from './ingest/playlists.js'
+import { Logger } from '../lib/logger.js'
 
 export interface IngestOptions {
   sourceDir?: string
@@ -16,6 +17,7 @@ export interface IngestOptions {
   pipeline?: 'users' | 'playlists' | 'all'
   file?: string
   concurrency?: number
+  debug?: boolean
 }
 
 /**
@@ -23,12 +25,18 @@ export interface IngestOptions {
  * @param options Options for ingestion
  */
 export async function ingest(options: IngestOptions = {}): Promise<void> {
-  const { sourceDir = './tmp', dryRun = false, pipeline = 'all' } = options
+  const {
+    sourceDir = './tmp',
+    dryRun = false,
+    pipeline = 'all',
+    debug = false,
+  } = options
+  const logger = new Logger(debug)
 
-  console.log('🚀 Starting document ingestion...')
-  console.log(`📁 Source directory: ${sourceDir}`)
-  console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
-  console.log(`🎯 Pipeline: ${pipeline}`)
+  logger.info('🚀 Starting document ingestion...')
+  logger.info(`📁 Source directory: ${sourceDir}`)
+  logger.info(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  logger.info(`🎯 Pipeline: ${pipeline}`)
 
   let userSummary: UserIngestionSummary | null = null
   let playlistSummary: PlaylistIngestionSummary | null = null
@@ -41,6 +49,7 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
           dryRun,
           ...(options.file && { file: options.file }),
           ...(options.concurrency && { concurrency: options.concurrency }),
+          ...(options.debug !== undefined && { debug: options.debug }),
         })
         break
 
@@ -50,6 +59,7 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
           dryRun,
           ...(options.file && { file: options.file }),
           ...(options.concurrency && { concurrency: options.concurrency }),
+          ...(options.debug !== undefined && { debug: options.debug }),
         })
         break
 
@@ -63,11 +73,13 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
           sourceDir,
           dryRun,
           ...(options.concurrency && { concurrency: options.concurrency }),
+          ...(options.debug !== undefined && { debug: options.debug }),
         })
         playlistSummary = await ingestPlaylists({
           sourceDir,
           dryRun,
           ...(options.concurrency && { concurrency: options.concurrency }),
+          ...(options.debug !== undefined && { debug: options.debug }),
         })
         break
 
@@ -76,21 +88,21 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
     }
 
     // Log summaries at the end
-    console.log('\n' + '='.repeat(60))
-    console.log('📊 INGESTION SUMMARY')
-    console.log('='.repeat(60))
+    logger.info('\n' + '='.repeat(60))
+    logger.info('📊 INGESTION SUMMARY')
+    logger.info('='.repeat(60))
 
     if (userSummary) {
-      console.log('\n📈 User Ingestion Summary:')
-      console.log(
+      logger.info('\n📈 User Ingestion Summary:')
+      logger.info(
         `✅ Successfully processed: ${userSummary.successCount} users`
       )
-      console.log(`❌ Failed to process: ${userSummary.errorCount} users`)
-      console.log(`📊 Total files: ${userSummary.totalFiles}`)
+      logger.info(`❌ Failed to process: ${userSummary.errorCount} users`)
+      logger.info(`📊 Total files: ${userSummary.totalFiles}`)
     }
 
     if (playlistSummary) {
-      console.log('\n📈 Playlist Ingestion Summary:')
+      logger.info('\n📈 Playlist Ingestion Summary:')
       const batchLine = [
         `✅ Batch write: ${playlistSummary.successCount} playlists`,
         `${playlistSummary.analysis.totalSavedItems} items saved`,
@@ -98,27 +110,27 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
         `${playlistSummary.analysis.totalItemsNotProcessed} items not processed (owner missing)`,
         `${playlistSummary.videoVariantsNotFound} VideoVariants not found`,
       ]
-      console.log(batchLine.join(', '))
-      console.log(
+      logger.info(batchLine.join(', '))
+      logger.info(
         `✅ Successfully processed: ${playlistSummary.successCount} playlists`
       )
-      console.log(
+      logger.info(
         `❌ Failed to process: ${playlistSummary.errorCount} playlists`
       )
-      console.log(`📊 Total files: ${playlistSummary.totalFiles}`)
-      console.log(
+      logger.info(`📊 Total files: ${playlistSummary.totalFiles}`)
+      logger.info(
         `🎵 Total playlist items: ${playlistSummary.analysis.totalItems}`
       )
-      console.log(
+      logger.info(
         `✅ Successfully saved playlist items: ${playlistSummary.analysis.totalSavedItems}`
       )
-      console.log(
+      logger.info(
         `❌ Skipped playlist items (VideoVariant not found): ${playlistSummary.analysis.totalSkippedItems}`
       )
-      console.log(
+      logger.info(
         `❌ Skipped playlist items (playlist owner missing): ${playlistSummary.analysis.totalItemsNotProcessed}`
       )
-      console.log(
+      logger.info(
         `📺 VideoVariants not found: ${playlistSummary.videoVariantsNotFound}`
       )
       const itemsSum =
@@ -126,20 +138,20 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
         playlistSummary.analysis.totalSkippedItems +
         playlistSummary.analysis.totalItemsNotProcessed
       if (itemsSum !== playlistSummary.analysis.totalItems) {
-        console.warn(
+        logger.warn(
           `⚠️ Item count mismatch: total ${playlistSummary.analysis.totalItems} ≠ saved + skipped + not processed (${itemsSum})`
         )
       }
-      console.log(
+      logger.info(
         `📺 Unique media components: ${playlistSummary.analysis.uniqueMediaComponents.size}`
       )
-      console.log(
+      logger.info(
         `📊 Average items per playlist: ${playlistSummary.analysis.averageItemsPerPlaylist.toFixed(2)}`
       )
 
       // Language distribution
       if (playlistSummary.analysis.languageDistribution.size > 0) {
-        console.log('\n🌍 Language Distribution:')
+        logger.info('\n🌍 Language Distribution:')
         const sortedLanguages = Array.from(
           playlistSummary.analysis.languageDistribution.entries()
         )
@@ -147,14 +159,14 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
           .slice(0, 5) // Show top 5 languages
 
         for (const [languageId, count] of sortedLanguages) {
-          console.log(`  Language ${languageId}: ${count} items`)
+          logger.info(`  Language ${languageId}: ${count} items`)
         }
       }
     }
 
-    console.log('\n🎉 Ingestion completed successfully!')
+    logger.info('\n🎉 Ingestion completed successfully!')
   } catch (error) {
-    console.error('❌ Ingestion failed:', error)
+    logger.error('❌ Ingestion failed:', error)
     throw error
   }
 }

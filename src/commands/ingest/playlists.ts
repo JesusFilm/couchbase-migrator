@@ -17,6 +17,8 @@ import {
   writeErrorToFile,
   clearErrorsDirectory,
 } from '../../lib/error-handler.js'
+import cliProgress from 'cli-progress'
+import { Logger } from '../../lib/logger.js'
 
 // Zod schemas for playlist data validation
 const PlaylistItemSchema = z.object({
@@ -115,25 +117,27 @@ async function generateUniqueSlug(): Promise<string> {
  * @param rawData Raw JSON data from file
  * @returns Processed playlist data or null if invalid
  */
-function validateAndTransformPlaylist(
+async function validateAndTransformPlaylist(
   rawData: unknown,
   sourceDir: string,
-  fileID: string
-): ProcessedPlaylist | null {
+  fileID: string,
+  logger: Logger
+): Promise<ProcessedPlaylist | null> {
   try {
     // Parse and validate the raw data with Zod
     const parseResult = PlaylistDocumentSchema.safeParse(rawData)
 
     if (!parseResult.success) {
-      console.warn(
+      logger.warn(
         '⚠️ Playlist document validation failed:',
         parseResult.error.issues
       )
-      writeErrorToFile(
+      await writeErrorToFile(
         sourceDir,
         'playlists',
         fileID,
         parseResult.error,
+        logger,
         rawData
       )
       return null
@@ -182,7 +186,7 @@ function validateAndTransformPlaylist(
       type: 'playlist',
     }
   } catch (error) {
-    console.error('❌ Error validating playlist data:', error)
+    logger.error('❌ Error validating playlist data:', error)
     return null
   }
 }
@@ -195,7 +199,8 @@ function validateAndTransformPlaylist(
 async function processPlaylistFile(
   filePath: string,
   sourceDir: string,
-  dryRun: boolean
+  dryRun: boolean,
+  logger: Logger
 ): Promise<ProcessedPlaylist | DeletedPlaylist | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
@@ -207,13 +212,14 @@ async function processPlaylistFile(
     }
     const fileID = path.basename(filePath, '.json')
 
-    const processedPlaylist = validateAndTransformPlaylist(
+    const processedPlaylist = await validateAndTransformPlaylist(
       rawData,
       sourceDir,
-      fileID
+      fileID,
+      logger
     )
     if (!processedPlaylist) {
-      console.log(
+      logger.log(
         `⏭️ Skipping invalid playlist file: ${path.basename(filePath)}`
       )
       await writeErrorToFile(
@@ -221,12 +227,13 @@ async function processPlaylistFile(
         'playlists',
         filePath,
         new Error('Invalid playlist file'),
+        logger,
         rawData
       )
       return null
     }
     if (dryRun) {
-      console.log(`⏭️ Skipping playlist ${processedPlaylist.name} in dry run`)
+      logger.log(`⏭️ Skipping playlist ${processedPlaylist.name} in dry run`)
       return processedPlaylist
     }
     try {
@@ -239,12 +246,13 @@ async function processPlaylistFile(
         const error = new Error(
           `User not found for playlist ${processedPlaylist.name}`
         )
-        console.error(`❌ ${error.message}`)
+        logger.error(`❌ ${error.message}`)
         await writeErrorToFile(
           sourceDir,
           'playlists',
           filePath,
           error,
+          logger,
           processedPlaylist
         )
         throw error
@@ -298,7 +306,7 @@ async function processPlaylistFile(
               },
             })
             if (!videoVariant) {
-              console.warn(
+              logger.warn(
                 `⚠️ VideoVariant not found for mediaComponentId: ${item.mediaComponentId} (playlist: ${processedPlaylist.name})`
               )
               const error = new Error(
@@ -310,6 +318,7 @@ async function processPlaylistFile(
                 'playListItems',
                 errorFilePath,
                 error,
+                logger,
                 {
                   playlistId: processedPlaylist.id,
                   playlistName: processedPlaylist.name,
@@ -365,7 +374,7 @@ async function processPlaylistFile(
             })
             savedItems.push(item)
           } catch (itemError) {
-            console.error(
+            logger.error(
               `❌ Error saving playlist item for mediaComponentId ${item.mediaComponentId}:`,
               itemError
             )
@@ -375,6 +384,7 @@ async function processPlaylistFile(
               'playListItems',
               errorFilePath,
               itemError,
+              logger,
               {
                 playlistId: processedPlaylist.id,
                 playlistName: processedPlaylist.name,
@@ -389,28 +399,29 @@ async function processPlaylistFile(
         processedPlaylist.savedItems = savedItems
         processedPlaylist.skippedItems = skippedItems
 
-        console.log(
+        logger.log(
           `  📝 Saved ${savedItems.length} playlist items, skipped ${skippedItems.length}`
         )
       }
     } catch (error) {
-      console.error(`❌ Error saving playlist to local database:`, error)
+      logger.error(`❌ Error saving playlist to local database:`, error)
       await writeErrorToFile(
         sourceDir,
         'playlists',
         filePath,
         error,
+        logger,
         processedPlaylist
       )
       return null
     }
 
-    console.log(
+    logger.log(
       `✅ Processed playlist: ${processedPlaylist.name} (${processedPlaylist.itemCount} items)`
     )
     return processedPlaylist
   } catch (error) {
-    console.error(`❌ Error processing playlist file ${filePath}:`, error)
+    logger.error(`❌ Error processing playlist file ${filePath}:`, error)
     // Try to read rawData if available, otherwise use undefined
     let rawData: unknown
     try {
@@ -419,7 +430,14 @@ async function processPlaylistFile(
     } catch {
       rawData = undefined
     }
-    await writeErrorToFile(sourceDir, 'playlists', filePath, error, rawData)
+    await writeErrorToFile(
+      sourceDir,
+      'playlists',
+      filePath,
+      error,
+      logger,
+      rawData
+    )
     return null
   }
 }
@@ -432,6 +450,7 @@ async function processPlaylistFile(
  */
 async function getPlaylistFiles(
   playlistDir: string,
+  logger: Logger,
   fileName?: string
 ): Promise<string[]> {
   try {
@@ -453,7 +472,7 @@ async function getPlaylistFiles(
       })
       .map(file => path.join(playlistDir, file))
   } catch (error) {
-    console.error(`❌ Error reading playlist directory ${playlistDir}:`, error)
+    logger.error(`❌ Error reading playlist directory ${playlistDir}:`, error)
     return []
   }
 }
@@ -533,6 +552,7 @@ export async function ingestPlaylists(
     dryRun?: boolean
     file?: string
     concurrency?: number
+    debug?: boolean
   } = {}
 ): Promise<PlaylistIngestionSummary | null> {
   const {
@@ -540,41 +560,58 @@ export async function ingestPlaylists(
     dryRun = false,
     file,
     concurrency = 10,
+    debug = false,
   } = options
+  const logger = new Logger(debug)
   const playlistDir = path.join(sourceDir, 'pl')
 
-  console.log('🎵 Starting playlist ingestion pipeline...')
-  console.log(`📁 Source directory: ${playlistDir}`)
-  console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
-  console.log(`⚡ Concurrency: ${concurrency}`)
+  logger.log('🎵 Starting playlist ingestion pipeline...')
+  logger.log(`📁 Source directory: ${playlistDir}`)
+  logger.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  logger.log(`⚡ Concurrency: ${concurrency}`)
   if (file) {
-    console.log(`📄 Processing single file: ${file}`)
+    logger.log(`📄 Processing single file: ${file}`)
   }
 
   // Clear errors directory at the beginning
-  await clearErrorsDirectory(sourceDir, 'playlists')
-  await clearErrorsDirectory(sourceDir, 'playListItems')
+  await clearErrorsDirectory(sourceDir, 'playlists', logger)
+  await clearErrorsDirectory(sourceDir, 'playListItems', logger)
 
   // Check if playlist directory exists
   try {
     await fs.access(playlistDir)
   } catch {
-    console.error(`❌ Playlist directory does not exist: ${playlistDir}`)
+    logger.error(`❌ Playlist directory does not exist: ${playlistDir}`)
     return null
   }
 
   // Get all playlist files
-  const playlistFiles = await getPlaylistFiles(playlistDir, file)
+  const playlistFiles = await getPlaylistFiles(playlistDir, logger, file)
   if (playlistFiles.length === 0) {
     if (file) {
-      console.log(`ℹ️ File ${file} not found in playlist directory`)
+      logger.info(`ℹ️ File ${file} not found in playlist directory`)
     } else {
-      console.log('ℹ️ No playlist files found in directory')
+      logger.info('ℹ️ No playlist files found in directory')
     }
     return null
   }
 
-  console.log(`📊 Found ${playlistFiles.length} playlist files to process`)
+  logger.log(`📊 Found ${playlistFiles.length} playlist files to process`)
+
+  let progressBar: cliProgress.SingleBar | null = null
+  if (!debug) {
+    progressBar = new cliProgress.SingleBar(
+      {
+        format:
+          '🎵 Ingesting playlists |{bar}| {percentage}% | {value}/{total} files | ETA: {eta}s',
+        barCompleteChar: '\u2588',
+        barIncompleteChar: '\u2591',
+        hideCursor: true,
+      },
+      cliProgress.Presets.shades_classic
+    )
+    progressBar.start(playlistFiles.length, 0)
+  }
 
   // Process playlist files with concurrency limit
   const processedPlaylists: ProcessedPlaylist[] = []
@@ -585,7 +622,9 @@ export async function ingestPlaylists(
     const batch = playlistFiles.slice(i, i + concurrency)
 
     const results = await Promise.allSettled(
-      batch.map(filePath => processPlaylistFile(filePath, sourceDir, dryRun))
+      batch.map(filePath =>
+        processPlaylistFile(filePath, sourceDir, dryRun, logger)
+      )
     )
 
     for (const result of results) {
@@ -597,26 +636,33 @@ export async function ingestPlaylists(
       } else {
         errorCount++
       }
+      if (progressBar) {
+        progressBar.update(successCount + errorCount)
+      }
     }
+  }
+
+  if (progressBar) {
+    progressBar.stop()
   }
 
   // Analyze playlist data
   const analysis = analyzePlaylistItems(processedPlaylists)
 
   if (dryRun) {
-    console.log('\n🔍 Dry run - showing sample processed playlists:')
+    logger.info('\n🔍 Dry run - showing sample processed playlists:')
     processedPlaylists.slice(0, 3).forEach((playlist, index) => {
-      console.log(`\nPlaylist ${index + 1}:`)
-      console.log(`  Name: ${playlist.name}`)
-      console.log(`  Display Name: ${playlist.displayName}`)
-      console.log(`  Owner: ${playlist.owner}`)
-      console.log(`  Items: ${playlist.itemCount}`)
-      console.log(`  Created: ${playlist.createdAt.toISOString()}`)
+      logger.info(`\nPlaylist ${index + 1}:`)
+      logger.info(`  Name: ${playlist.name}`)
+      logger.info(`  Display Name: ${playlist.displayName}`)
+      logger.info(`  Owner: ${playlist.owner}`)
+      logger.info(`  Items: ${playlist.itemCount}`)
+      logger.info(`  Created: ${playlist.createdAt.toISOString()}`)
     })
   } else {
     // TODO: Implement actual ingestion to Core system
-    console.log('\n🚀 Ready to ingest playlists to Core system')
-    console.log(`📊 ${processedPlaylists.length} playlists ready for ingestion`)
+    logger.info('\n🚀 Ready to ingest playlists to Core system')
+    logger.info(`📊 ${processedPlaylists.length} playlists ready for ingestion`)
   }
 
   return {

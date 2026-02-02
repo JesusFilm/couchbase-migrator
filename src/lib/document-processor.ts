@@ -8,6 +8,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { fileTypeFromBuffer } from 'file-type'
 import { CouchbaseClient } from './couchbase'
+import { Logger } from './logger.js'
 
 export interface Document {
   id: string
@@ -87,14 +88,17 @@ function generateFilename(id: string): string {
  * @param buffer Binary data buffer
  * @returns File extension (including dot) or '.bin' as fallback
  */
-async function detectFileExtension(buffer: Buffer): Promise<string> {
+async function detectFileExtension(
+  buffer: Buffer,
+  logger: Logger
+): Promise<string> {
   try {
     const fileType = await fileTypeFromBuffer(buffer)
     if (fileType) {
       return `.${fileType.ext}`
     }
   } catch (error) {
-    console.warn('⚠️ Could not detect file type:', error)
+    logger.warn('⚠️ Could not detect file type:', error)
   }
 
   // Fallback to .bin if detection fails
@@ -110,6 +114,7 @@ async function detectFileExtension(buffer: Buffer): Promise<string> {
  */
 async function withRetry<T>(
   fn: () => Promise<T>,
+  logger: Logger,
   maxRetries: number = 3,
   baseDelay: number = 1000
 ): Promise<T> {
@@ -122,16 +127,15 @@ async function withRetry<T>(
       lastError = error as Error
 
       if (attempt === maxRetries) {
-        console.error(
-          `❌ Failed after ${maxRetries} attempts:`,
-          lastError.message
+        logger.error(
+          `❌ Failed after ${maxRetries} attempts: ${lastError.message}`
         )
         throw lastError
       }
 
       // Calculate delay with exponential backoff: baseDelay * 2^(attempt-1)
       const delay = baseDelay * Math.pow(2, attempt - 1)
-      console.warn(
+      logger.warn(
         `⚠️ Attempt ${attempt}/${maxRetries} failed, retrying in ${delay}ms: ${lastError.message}`
       )
 
@@ -143,6 +147,54 @@ async function withRetry<T>(
 }
 
 /**
+ * Get total count of documents in the bucket
+ * @param client Couchbase client instance
+ * @param logger Logger instance
+ * @param skipAttachments Whether to exclude attachments from count
+ * @returns Total document count
+ */
+export async function getDocumentCount(
+  client: CouchbaseClient,
+  logger: Logger,
+  skipAttachments: boolean = false
+): Promise<number> {
+  const cluster = await client.getCluster()
+  const config = client.getConfig()
+
+  let query: string
+  if (skipAttachments) {
+    // Count only non-attachment documents
+    query = `
+      SELECT COUNT(*) as count
+      FROM \`${config.bucketName}\`
+      WHERE META().id NOT LIKE '_sync:att:%' AND META().id NOT LIKE '_sync:rev:%'
+    `
+  } else {
+    // Count all documents
+    query = `
+      SELECT COUNT(*) as count
+      FROM \`${config.bucketName}\`
+    `
+  }
+
+  const result = await withRetry(
+    () =>
+      cluster.query<{ count: number }>(query, {
+        timeout: config.operationTimeout,
+      }),
+    logger,
+    3, // max retries
+    500
+  )
+
+  if (result.rows.length > 0 && result.rows[0]?.count !== undefined) {
+    return result.rows[0].count
+  }
+
+  return 0
+}
+
+/**
  * Paginate binary documents in the collection using N1QL for IDs, then KV for content
  * Processes documents immediately as they're retrieved instead of collecting in an array
  * @param client Couchbase client instance
@@ -151,7 +203,12 @@ async function withRetry<T>(
  */
 export async function getDocuments(
   client: CouchbaseClient,
-  options?: { offset?: number; limit?: number; skipAttachments?: boolean }
+  logger: Logger,
+  options?: {
+    offset?: number
+    limit?: number
+    skipAttachments?: boolean
+  }
 ): Promise<{
   documentsProcessed: number
   documentsSkipped: number
@@ -183,6 +240,7 @@ export async function getDocuments(
           },
         }
       ),
+    logger,
     3, // max retries
     500
   )
@@ -203,14 +261,14 @@ export async function getDocuments(
 
       if (isAttachment && skipAttachments) {
         // Skip binary attachments when skipAttachments is enabled
-        console.log(`⏭️ attachment: ${id} (--skip-attachments enabled)`)
+        logger.log(`⏭️ attachment: ${id} (--skip-attachments enabled)`)
         documentsSkipped++
         continue
       }
 
       if (isAttachment) {
         // Handle binary attachments
-        const wasProcessed = await processAttachment(id, client)
+        const wasProcessed = await processAttachment(id, client, logger)
         if (wasProcessed) {
           documentsProcessed++
         } else {
@@ -218,7 +276,7 @@ export async function getDocuments(
         }
       } else {
         // Handle JSON documents
-        const wasProcessed = await processJsonDocument(id, content)
+        const wasProcessed = await processJsonDocument(id, content, logger)
         if (wasProcessed) {
           documentsProcessed++
         } else {
@@ -226,7 +284,7 @@ export async function getDocuments(
         }
       }
     } catch (error) {
-      console.error(`❌ Error processing document ${id}:`, error)
+      logger.error(`❌ Error processing document ${id}:`, error)
       // Continue with other documents even if one fails
     }
   }
@@ -247,7 +305,8 @@ export async function getDocuments(
  */
 export async function processAttachment(
   id: string,
-  client: CouchbaseClient
+  client: CouchbaseClient,
+  logger: Logger
 ): Promise<boolean> {
   try {
     const config = client.getConfig()
@@ -279,7 +338,7 @@ export async function processAttachment(
     }
 
     if (existingFile) {
-      console.log(`⏭️ attachment: ${existingFile} (already exists)`)
+      logger.log(`⏭️ attachment: ${existingFile} (already exists)`)
       return false
     }
 
@@ -289,6 +348,7 @@ export async function processAttachment(
         collection.get(id, {
           timeout: config.operationTimeout,
         }),
+      logger,
       3, // max retries
       1000 // base delay in ms
     )
@@ -301,7 +361,7 @@ export async function processAttachment(
     }
 
     // Detect file type and get appropriate extension
-    const fileExtension = await detectFileExtension(document.content)
+    const fileExtension = await detectFileExtension(document.content, logger)
 
     // Create file path with detected extension
     const filePath = path.join(tempDir, `${safeFilename}${fileExtension}`)
@@ -323,10 +383,10 @@ export async function processAttachment(
 
     // Show clean message with relative path and appropriate size
     const relativePath = filePath.replace('./', '')
-    console.log(`✅ attachment: ${relativePath} (${sizeDisplay})`)
+    logger.log(`✅ attachment: ${relativePath} (${sizeDisplay})`)
     return true
   } catch (error) {
-    console.error(`❌ Error processing attachment ${id}:`, error)
+    logger.error(`❌ Error processing attachment ${id}:`, error)
     throw error
   }
 }
@@ -339,7 +399,8 @@ export async function processAttachment(
  */
 export async function processJsonDocument(
   id: string,
-  content: Record<string, unknown>
+  content: Record<string, unknown>,
+  logger: Logger
 ): Promise<boolean> {
   try {
     // Create a JSON file for the document
@@ -355,7 +416,7 @@ export async function processJsonDocument(
     try {
       await fs.access(jsonFilePath)
       const relativePath = jsonFilePath.replace('./', '')
-      console.log(`⏭️ JSON document: ${relativePath} (already exists)`)
+      logger.log(`⏭️ JSON document: ${relativePath} (already exists)`)
       return false
     } catch {
       // File doesn't exist, continue processing
@@ -367,10 +428,10 @@ export async function processJsonDocument(
 
     // Show clean message with relative path
     const relativePath = jsonFilePath.replace('./', '')
-    console.log(`✅ JSON document: ${relativePath}`)
+    logger.log(`✅ JSON document: ${relativePath}`)
     return true
   } catch (error) {
-    console.error(`❌ Error processing JSON document ${id}:`, error)
+    logger.error(`❌ Error processing JSON document ${id}:`, error)
     throw error
   }
 }

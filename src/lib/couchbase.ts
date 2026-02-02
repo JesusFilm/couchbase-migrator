@@ -1,5 +1,6 @@
 import { Cluster, Bucket, ConnectOptions } from 'couchbase'
 import { env } from './env.js'
+import { Logger } from './logger.js'
 
 export interface CouchbaseConfig {
   connectionString: string
@@ -9,6 +10,7 @@ export interface CouchbaseConfig {
   connectionTimeout: number
   operationTimeout: number
   trustStorePath?: string // Path to trust store file for SSL certificate validation
+  debug?: boolean
 }
 
 export class CouchbaseClient {
@@ -18,6 +20,7 @@ export class CouchbaseClient {
   private config: CouchbaseConfig
   private isConnected: boolean = false
   private initPromise: Promise<CouchbaseClient> | null = null
+  private logger: Logger
 
   private constructor(config?: Partial<CouchbaseConfig>) {
     this.config = {
@@ -32,6 +35,7 @@ export class CouchbaseClient {
       }),
       ...config,
     }
+    this.logger = new Logger(config?.debug ?? false)
   }
 
   /**
@@ -68,10 +72,10 @@ export class CouchbaseClient {
    */
   private async _establishConnection(): Promise<void> {
     try {
-      console.log('🔌 Connecting to Couchbase cluster...')
-      console.log(`📍 Connection string: ${this.config.connectionString}`)
-      console.log(`👤 Username: ${this.config.username}`)
-      console.log(`🪣 Bucket: ${this.config.bucketName}`)
+      this.logger.info('🔌 Connecting to Couchbase cluster...')
+      this.logger.info(`📍 Connection string: ${this.config.connectionString}`)
+      this.logger.info(`👤 Username: ${this.config.username}`)
+      this.logger.info(`🪣 Bucket: ${this.config.bucketName}`)
 
       const options: ConnectOptions = {
         username: this.config.username,
@@ -91,10 +95,10 @@ export class CouchbaseClient {
       this.bucket = this.cluster.bucket(this.config.bucketName)
 
       this.isConnected = true
-      console.log('✅ Successfully connected to Couchbase!')
-      console.log(`📊 Cluster info: ${await this.getClusterInfo()}`)
+      this.logger.info('✅ Successfully connected to Couchbase!')
+      this.logger.info(`📊 Cluster info: ${await this.getClusterInfo()}`)
     } catch (error) {
-      console.error('❌ Failed to connect to Couchbase:', error)
+      this.logger.error('❌ Failed to connect to Couchbase:', error)
       throw error
     }
   }
@@ -110,12 +114,12 @@ export class CouchbaseClient {
         this.bucket = null
         this.isConnected = false
         this.initPromise = null
-        console.log('🔌 Disconnected from Couchbase')
+        this.logger.info('🔌 Disconnected from Couchbase')
       } else {
-        console.log('ℹ️ Not connected to Couchbase, nothing to disconnect')
+        this.logger.info('ℹ️ Not connected to Couchbase, nothing to disconnect')
       }
     } catch (error) {
-      console.error('❌ Error disconnecting from Couchbase:', error)
+      this.logger.error('❌ Error disconnecting from Couchbase:', error)
       throw error
     }
   }
@@ -132,7 +136,7 @@ export class CouchbaseClient {
       const diagnostics = await this.cluster.diagnostics()
       return `Connected to cluster (${JSON.stringify(diagnostics)})`
     } catch (error) {
-      console.error('❌ Error getting cluster info:', error)
+      this.logger.error('❌ Error getting cluster info:', error)
       throw error
     }
   }
@@ -188,4 +192,8 @@ export class CouchbaseClient {
   }
 }
 
-export const client = CouchbaseClient.getInstance()
+export const getClient = (
+  config?: Partial<CouchbaseConfig>
+): CouchbaseClient => {
+  return CouchbaseClient.getInstance(config)
+}

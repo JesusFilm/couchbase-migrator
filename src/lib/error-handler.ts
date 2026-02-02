@@ -6,6 +6,7 @@
 
 import { promises as fs } from 'fs'
 import path from 'path'
+import { Logger } from './logger.js'
 
 /**
  * Write error to errors directory
@@ -13,6 +14,7 @@ import path from 'path'
  * @param category Error category (e.g., 'users', 'playlists')
  * @param filePath Original file path
  * @param error Error that occurred
+ * @param logger Logger instance
  * @param data Optional data object to save along with the error
  */
 export async function writeErrorToFile(
@@ -20,6 +22,7 @@ export async function writeErrorToFile(
   category: string,
   filePath: string,
   error: unknown,
+  logger: Logger,
   data?: unknown
 ): Promise<void> {
   try {
@@ -58,7 +61,7 @@ export async function writeErrorToFile(
       'utf8'
     )
   } catch (writeError) {
-    console.error(`❌ Failed to write error file for ${filePath}:`, writeError)
+    logger.error(`❌ Failed to write error file for ${filePath}:`, writeError)
   }
 }
 
@@ -66,10 +69,12 @@ export async function writeErrorToFile(
  * Clear errors directory for a specific category
  * @param sourceDir Base source directory
  * @param category Error category (e.g., 'users', 'playlists')
+ * @param logger Logger instance
  */
 export async function clearErrorsDirectory(
   sourceDir: string,
-  category: string
+  category: string,
+  logger: Logger
 ): Promise<void> {
   try {
     const errorsDir = path.join(sourceDir, 'errors', category)
@@ -81,7 +86,7 @@ export async function clearErrorsDirectory(
       for (const file of files) {
         await fs.unlink(path.join(errorsDir, file))
       }
-      console.log(
+      logger.info(
         `🧹 Cleared ${files.length} error file(s) from errors/${category}/`
       )
     } catch {
@@ -89,6 +94,6 @@ export async function clearErrorsDirectory(
       await fs.mkdir(errorsDir, { recursive: true })
     }
   } catch (error) {
-    console.warn(`⚠️ Could not clear errors directory:`, error)
+    logger.warn(`⚠️ Could not clear errors directory:`, error)
   }
 }
