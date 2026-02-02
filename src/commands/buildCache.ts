@@ -15,7 +15,7 @@ export async function buildCache(
   options: { skipAttachments?: boolean } = {}
 ): Promise<void> {
   try {
-    const { skipAttachments = false } = options
+    const { skipAttachments = true } = options
 
     await client.connect()
 
