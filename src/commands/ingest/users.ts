@@ -92,16 +92,83 @@ function validateAndTransformUser(
 }
 
 /**
+ * Retry Okta API call with exponential backoff for rate limits
+ * @param fn Function that returns a fetch Response
+ * @param maxRetries Maximum number of retries (default: 5)
+ * @param baseDelay Base delay in milliseconds (default: 1000)
+ * @returns Promise that resolves with the Response
+ */
+async function fetchOktaWithRetry(
+  fn: () => Promise<Response>,
+  maxRetries: number = 5,
+  baseDelay: number = 5000
+): Promise<Response> {
+  let lastResponse: Response | undefined
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const response = await fn()
+
+    // Success - return immediately
+    if (response.ok) {
+      return response
+    }
+
+    // 429 rate limit - retry with backoff
+    if (response.status === 429) {
+      lastResponse = response
+
+      if (attempt === maxRetries) {
+        console.error(
+          `❌ Okta rate limit hit after ${maxRetries} attempts. Giving up.`
+        )
+        return response
+      }
+
+      // Check for x-rate-limit-reset header (Unix timestamp)
+      const rateLimitReset = response.headers.get('x-rate-limit-reset')
+      let delay: number
+
+      if (rateLimitReset) {
+        // Use x-rate-limit-reset header (Unix timestamp in seconds)
+        const resetTime = parseInt(rateLimitReset, 10) * 1000
+        const now = Date.now()
+        const bufferMs = 500 // 500ms buffer to ensure rate limit has reset
+        delay = Math.max(0, resetTime - now + bufferMs)
+        console.warn(
+          `⚠️ Okta rate limit (429) - x-rate-limit-reset: ${rateLimitReset} (${new Date(resetTime).toISOString()}). Waiting ${delay}ms before retry ${attempt + 1}/${maxRetries}`
+        )
+      } else {
+        // Exponential backoff: baseDelay * 2^(attempt-1)
+        delay = baseDelay * Math.pow(2, attempt - 1)
+        console.warn(
+          `⚠️ Okta rate limit (429) - No x-rate-limit-reset header. Retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`
+        )
+      }
+
+      await new Promise(resolve => setTimeout(resolve, delay))
+      continue
+    }
+
+    // Other errors - return immediately (don't retry)
+    return response
+  }
+
+  return lastResponse!
+}
+
+/**
  * Process a single user JSON file
  * @param filePath Path to the user JSON file
  * @param sourceDir Base source directory for error files
  * @param dryRun Whether this is a dry run
+ * @param oktaToken Okta token to use for API calls
  * @returns Processed user data or null if processing failed
  */
 async function processUserFile(
   filePath: string,
   sourceDir: string,
-  dryRun: boolean
+  dryRun: boolean,
+  oktaToken: string
 ): Promise<User | UserLocal | null> {
   try {
     const fileContent = await fs.readFile(filePath, 'utf8')
@@ -137,14 +204,20 @@ async function processUserFile(
 
     try {
       const filterExpression = `profile.theKeyGuid eq "${userData.theKeySsoGuid.trim()}"`
-      const oktaResponse = await fetch(
-        `https://signon.okta.com/api/v1/users?search=${encodeURIComponent(filterExpression)}`,
-        {
-          headers: {
-            Authorization: `SSWS ${env.OKTA_TOKEN}`,
-            Accept: 'application/json',
-          },
-        }
+      const token = oktaToken
+      const oktaResponse = await fetchOktaWithRetry(
+        () =>
+          fetch(
+            `https://signon.okta.com/api/v1/users?search=${encodeURIComponent(filterExpression)}`,
+            {
+              headers: {
+                Authorization: `SSWS ${token}`,
+                Accept: 'application/json',
+              },
+            }
+          ),
+        5, // max retries
+        5000 // base delay 5 second
       )
 
       if (!oktaResponse.ok) {
@@ -500,13 +573,24 @@ export interface UserIngestionSummary {
  * @returns Summary of user ingestion
  */
 export async function ingestUsers(
-  options: { sourceDir?: string; dryRun?: boolean; file?: string } = {}
+  options: {
+    sourceDir?: string
+    dryRun?: boolean
+    file?: string
+    concurrency?: number
+  } = {}
 ): Promise<UserIngestionSummary | null> {
-  const { sourceDir = './tmp', dryRun = false, file } = options
+  const {
+    sourceDir = './tmp',
+    dryRun = false,
+    file,
+    concurrency = 10,
+  } = options
 
   console.log('👥 Starting user ingestion pipeline...')
   console.log(`📁 Source directory: ${sourceDir}`)
   console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  console.log(`⚡ Concurrency: ${concurrency} (balanced across 2 Okta tokens)`)
   if (file) {
     console.log(`📄 Processing single file: ${file}`)
   }
@@ -527,18 +611,35 @@ export async function ingestUsers(
 
   console.log(`📊 Found ${userFiles.length} user files to process`)
 
-  // Process each user file
+  // Process user files with concurrency limit, balancing between two tokens
   const processedUsers: (User | UserLocal)[] = []
   let successCount = 0
   let errorCount = 0
 
-  for (const filePath of userFiles) {
-    const processedUser = await processUserFile(filePath, sourceDir, dryRun)
-    if (processedUser) {
-      processedUsers.push(processedUser)
-      successCount++
-    } else {
-      errorCount++
+  for (let i = 0; i < userFiles.length; i += concurrency) {
+    const batch = userFiles.slice(i, i + concurrency)
+    const halfBatch = Math.ceil(batch.length / 2)
+
+    // Split batch: first half uses OKTA_TOKEN, second half uses OKTA_TOKEN_2
+    const firstHalf = batch.slice(0, halfBatch)
+    const secondHalf = batch.slice(halfBatch)
+
+    const results = await Promise.allSettled([
+      ...firstHalf.map(filePath =>
+        processUserFile(filePath, sourceDir, dryRun, env.OKTA_TOKEN)
+      ),
+      ...secondHalf.map(filePath =>
+        processUserFile(filePath, sourceDir, dryRun, env.OKTA_TOKEN_2)
+      ),
+    ])
+
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) {
+        processedUsers.push(result.value)
+        successCount++
+      } else {
+        errorCount++
+      }
     }
   }
 

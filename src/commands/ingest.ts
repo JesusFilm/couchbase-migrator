@@ -15,6 +15,7 @@ export interface IngestOptions {
   dryRun?: boolean
   pipeline?: 'users' | 'playlists' | 'all'
   file?: string
+  concurrency?: number
 }
 
 /**
@@ -56,7 +57,11 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
             '--file option can only be used with --pipeline users or --pipeline playlists, not --pipeline all'
           )
         }
-        userSummary = await ingestUsers({ sourceDir, dryRun })
+        userSummary = await ingestUsers({
+          sourceDir,
+          dryRun,
+          ...(options.concurrency && { concurrency: options.concurrency }),
+        })
         playlistSummary = await ingestPlaylists({ sourceDir, dryRun })
         break
 

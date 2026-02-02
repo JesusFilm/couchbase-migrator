@@ -28,8 +28,7 @@
     "prisma:studio:api-users": "dotenv -e .env -- prisma studio --schema=prisma/api-users/schema.prisma",
     "prisma:studio:api-media": "dotenv -e .env -- prisma studio --schema=prisma/api-media/schema.prisma",
     "prisma:studio:users": "dotenv -e .env -- prisma studio --schema=prisma/users/schema.prisma",
-    "prisma:reset:users": "dotenv -e .env -- prisma migrate reset --schema=prisma/users/schema.prisma --force",
-    "reset:firebase": "tsx src/main.ts reset:firebase"
+    "prisma:reset:users": "dotenv -e .env -- prisma migrate reset --schema=prisma/users/schema.prisma --force"
   },
   "keywords": [],
   "author": "",

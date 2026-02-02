@@ -55,9 +55,19 @@ program
     'specify a single file to ingest (only works with --pipeline users or --pipeline playlists)'
   )
   .option('--dry-run', 'perform a dry run without actually ingesting data')
+  .option(
+    '--concurrency <number>',
+    'number of users to process concurrently (default: 10)',
+    '10'
+  )
   .action(async options => {
     try {
-      await ingest(options)
+      await ingest({
+        ...options,
+        concurrency: options.concurrency
+          ? parseInt(options.concurrency, 10)
+          : undefined,
+      })
     } catch (error) {
       console.error('❌ Fatal error:', error)
       process.exit(1)
