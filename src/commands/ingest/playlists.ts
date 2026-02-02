@@ -528,14 +528,25 @@ export interface PlaylistIngestionSummary {
  * @returns Summary of playlist ingestion
  */
 export async function ingestPlaylists(
-  options: { sourceDir?: string; dryRun?: boolean; file?: string } = {}
+  options: {
+    sourceDir?: string
+    dryRun?: boolean
+    file?: string
+    concurrency?: number
+  } = {}
 ): Promise<PlaylistIngestionSummary | null> {
-  const { sourceDir = './tmp', dryRun = false, file } = options
+  const {
+    sourceDir = './tmp',
+    dryRun = false,
+    file,
+    concurrency = 10,
+  } = options
   const playlistDir = path.join(sourceDir, 'pl')
 
   console.log('🎵 Starting playlist ingestion pipeline...')
   console.log(`📁 Source directory: ${playlistDir}`)
   console.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  console.log(`⚡ Concurrency: ${concurrency}`)
   if (file) {
     console.log(`📄 Processing single file: ${file}`)
   }
@@ -565,24 +576,27 @@ export async function ingestPlaylists(
 
   console.log(`📊 Found ${playlistFiles.length} playlist files to process`)
 
-  // Process each playlist file
+  // Process playlist files with concurrency limit
   const processedPlaylists: ProcessedPlaylist[] = []
   let successCount = 0
   let errorCount = 0
 
-  for (const filePath of playlistFiles) {
-    const processedPlaylist = await processPlaylistFile(
-      filePath,
-      sourceDir,
-      dryRun
+  for (let i = 0; i < playlistFiles.length; i += concurrency) {
+    const batch = playlistFiles.slice(i, i + concurrency)
+
+    const results = await Promise.allSettled(
+      batch.map(filePath => processPlaylistFile(filePath, sourceDir, dryRun))
     )
-    if (processedPlaylist) {
-      if (processedPlaylist.type === 'playlist') {
-        processedPlaylists.push(processedPlaylist)
+
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) {
+        if (result.value.type === 'playlist') {
+          processedPlaylists.push(result.value)
+        }
+        successCount++
+      } else {
+        errorCount++
       }
-      successCount++
-    } else {
-      errorCount++
     }
   }
 

@@ -57,7 +57,7 @@ program
   .option('--dry-run', 'perform a dry run without actually ingesting data')
   .option(
     '--concurrency <number>',
-    'number of users to process concurrently (default: 10)',
+    'number of files to process concurrently (default: 10)',
     '10'
   )
   .action(async options => {

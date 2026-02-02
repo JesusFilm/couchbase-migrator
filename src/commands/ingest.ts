@@ -40,6 +40,7 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
           sourceDir,
           dryRun,
           ...(options.file && { file: options.file }),
+          ...(options.concurrency && { concurrency: options.concurrency }),
         })
         break
 
@@ -48,6 +49,7 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
           sourceDir,
           dryRun,
           ...(options.file && { file: options.file }),
+          ...(options.concurrency && { concurrency: options.concurrency }),
         })
         break
 
@@ -62,7 +64,11 @@ export async function ingest(options: IngestOptions = {}): Promise<void> {
           dryRun,
           ...(options.concurrency && { concurrency: options.concurrency }),
         })
-        playlistSummary = await ingestPlaylists({ sourceDir, dryRun })
+        playlistSummary = await ingestPlaylists({
+          sourceDir,
+          dryRun,
+          ...(options.concurrency && { concurrency: options.concurrency }),
+        })
         break
 
       default:
