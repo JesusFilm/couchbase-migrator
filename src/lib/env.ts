@@ -12,14 +12,12 @@ export const env = createEnv({
     COUCHBASE_USERNAME: z.string().default('Administrator'),
     COUCHBASE_PASSWORD: z.string().default('password'),
 
-    // Bucket Configuration
+    // Couchbase Bucket Configuration
     COUCHBASE_BUCKET_NAME: z.string().default('default'),
 
-    // Connection Options
+    // Couchbase Connection Options
     COUCHBASE_CONNECTION_TIMEOUT: z.coerce.number().default(10000),
     COUCHBASE_OPERATION_TIMEOUT: z.coerce.number().default(5000),
-
-    // SSL Configuration
     COUCHBASE_TRUST_STORE_PATH: z.string().optional(),
 
     // Prisma Database URLs
