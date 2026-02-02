@@ -259,3 +259,4 @@ src/lib/prisma/*/__generated__/
 
 
 /src/__generated__/prisma
+nohup.out
