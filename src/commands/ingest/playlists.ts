@@ -246,7 +246,7 @@ async function processPlaylistFile(
         const error = new Error(
           `User not found for playlist ${processedPlaylist.name}`
         )
-        logger.error(`❌ ${error.message}`)
+        logger.warn(`⚠️ ${error.message}`)
         await writeErrorToFile(
           sourceDir,
           'playlists',
@@ -255,7 +255,7 @@ async function processPlaylistFile(
           logger,
           processedPlaylist
         )
-        throw error
+        return null
       }
       // Check if playlist already exists to determine if we need to generate a slug
       const existingPlaylist = await prismaApiMedia.playlist.findUnique({
@@ -374,8 +374,8 @@ async function processPlaylistFile(
             })
             savedItems.push(item)
           } catch (itemError) {
-            logger.error(
-              `❌ Error saving playlist item for mediaComponentId ${item.mediaComponentId}:`,
+            logger.warn(
+              `⚠️ Error saving playlist item for mediaComponentId ${item.mediaComponentId}:`,
               itemError
             )
             const errorFilePath = `${processedPlaylist.id}-${item.order}-${item.mediaComponentId}.json`
@@ -404,7 +404,7 @@ async function processPlaylistFile(
         )
       }
     } catch (error) {
-      logger.error(`❌ Error saving playlist to local database:`, error)
+      logger.warn(`⚠️ Error saving playlist to local database:`, error)
       await writeErrorToFile(
         sourceDir,
         'playlists',
@@ -472,7 +472,7 @@ async function getPlaylistFiles(
       })
       .map(file => path.join(playlistDir, file))
   } catch (error) {
-    logger.error(`❌ Error reading playlist directory ${playlistDir}:`, error)
+    logger.warn(`⚠️ Error reading playlist directory ${playlistDir}:`, error)
     return []
   }
 }
