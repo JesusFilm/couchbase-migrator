@@ -13,6 +13,7 @@ import {
   type Prisma,
   type User,
 } from '../../lib/prisma/api-users/client.js'
+import { prismaApiMedia } from '../../lib/prisma/api-media/client.js'
 import { prismaUsers } from '../../lib/prisma/users/client.js'
 import type { User as UserLocal } from '../../lib/prisma/users/client.js'
 import { v4 as uuidv4 } from 'uuid'
@@ -191,12 +192,12 @@ async function processUserFile(
       logger
     )
     if (!userData) {
-      logger.log(`⏭️ Skipping invalid user file: ${filePath}`)
+      logger.info(`⏭️ Skipping invalid user file: ${filePath}`)
       return null
     }
 
     if (dryRun) {
-      logger.log(`⏭️ Skipping user ${userData.email} in dry run`)
+      logger.info(`⏭️ Skipping user ${userData.email} in dry run`)
       return null
     }
 
@@ -207,9 +208,34 @@ async function processUserFile(
         ssoGuid: userData.theKeySsoGuid,
       },
     })
-    if (existingLocalUser) {
-      logger.log(
+    if (existingLocalUser && existingLocalUser.firebaseUserId != null) {
+      logger.info(
         `✅ User with ssoGuid ${userData.theKeySsoGuid} and email ${userData.email} already exists in local database`
+      )
+      // Still upsert api-media UserMediaProfile so profile preferences stay in sync
+      const countryInterestIds = userData.notificationCountries ?? []
+      const languageInterestIds = (userData.notificationLanguages ?? []).map(
+        id => String(id)
+      )
+      const selectedInterestIds = userData.selectedInterests ?? []
+      const videoIdsToConnect = selectedInterestIds.map(id => ({ id }))
+      await prismaApiMedia.userMediaProfile.upsert({
+        where: { userId: existingLocalUser.firebaseUserId },
+        create: {
+          id: uuidv4(),
+          userId: existingLocalUser.firebaseUserId,
+          countryInterestIds,
+          languageInterestIds,
+          userInterests: { connect: videoIdsToConnect },
+        },
+        update: {
+          countryInterestIds,
+          languageInterestIds,
+          userInterests: { set: videoIdsToConnect },
+        },
+      })
+      logger.info(
+        `✅ Upserted UserMediaProfile for ${userData.email} (userId: ${existingLocalUser.firebaseUserId})`
       )
       return existingLocalUser
     }
@@ -345,7 +371,7 @@ async function processUserFile(
           theKeySsoGuid: resData.profile.theKeyGuid,
         }
 
-        logger.log(
+        logger.info(
           `✅ Fetched Okta user data for email ${userData.email} and ssoGuid ${userData.theKeySsoGuid}:`,
           {
             id: oktaUserData?.id,
@@ -392,7 +418,7 @@ async function processUserFile(
     try {
       try {
         firebaseUser = await auth.getUserByEmail(oktaUserData.primaryEmail)
-        logger.log(
+        logger.info(
           `ℹ️ User with email ${userData.email} already exists in Firebase (UID: ${firebaseUser.uid})`
         )
         const oktaProvider = firebaseUser.providerData.find(
@@ -409,11 +435,11 @@ async function processUserFile(
               email: oktaUserData.primaryEmail,
             },
           })
-          logger.log(
+          logger.info(
             `✅ Updated Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
           )
         } else {
-          logger.log(`✅ User ${userData.email} already has Okta provider`)
+          logger.info(`✅ User ${userData.email} already has Okta provider`)
         }
       } catch (error: unknown) {
         // User doesn't exist if error code is 'auth/user-not-found'
@@ -440,7 +466,7 @@ async function processUserFile(
               },
             })
 
-            logger.log(
+            logger.info(
               `✅ Created Firebase user for ${userData.email} with Okta OCID: ${userData.theKeySsoGuid}`
             )
           } catch (error) {
@@ -507,12 +533,12 @@ async function processUserFile(
       let userSavedToCore: User
 
       if (existingUser) {
-        logger.log(
+        logger.info(
           `✅ User ${firebaseUser.email} already exists in core database`
         )
         userSavedToCore = existingUser
       } else {
-        // User doesn't exist, create (use lowercase email)
+        // User doesn't exist, create with Firebase UID as core id (use lowercase email)
         const user: Prisma.UserCreateInput = {
           id: uuidv4(),
           userId: firebaseUser.uid,
@@ -526,7 +552,7 @@ async function processUserFile(
         userSavedToCore = await prismaApiUsers.user.create({
           data: user,
         })
-        logger.log(`✅ Created user ${firebaseUser.email} in core database`)
+        logger.info(`✅ Created user ${firebaseUser.email} in core database`)
       }
 
       const userToSaveToLocal = {
@@ -534,12 +560,42 @@ async function processUserFile(
         email: firebaseUser.email.toLowerCase(),
         ssoGuid: oktaUserData.theKeySsoGuid,
         coreId: userSavedToCore.id,
+        firebaseUserId: firebaseUser.uid,
       }
 
-      await prismaUsers.user.create({
-        data: userToSaveToLocal,
+      await prismaUsers.user.upsert({
+        where: { ssoGuid: oktaUserData.theKeySsoGuid },
+        create: userToSaveToLocal,
+        update: userToSaveToLocal,
       })
-      logger.log(`✅ Saved user ${firebaseUser.email} to local database`)
+      logger.info(`✅ Saved user ${firebaseUser.email} to local database`)
+
+      // Upsert UserMediaProfile (countryInterestIds, languageInterestIds, userInterests)
+      const countryInterestIds = userData.notificationCountries ?? []
+      const languageInterestIds = (userData.notificationLanguages ?? []).map(
+        id => String(id)
+      )
+      const selectedInterestIds = userData.selectedInterests ?? []
+      const videoIdsToConnect = selectedInterestIds.map(id => ({ id }))
+
+      await prismaApiMedia.userMediaProfile.upsert({
+        where: { userId: userSavedToCore.userId },
+        create: {
+          id: uuidv4(),
+          userId: userSavedToCore.userId,
+          countryInterestIds,
+          languageInterestIds,
+          userInterests: { connect: videoIdsToConnect },
+        },
+        update: {
+          countryInterestIds,
+          languageInterestIds,
+          userInterests: { set: videoIdsToConnect },
+        },
+      })
+      logger.info(
+        `✅ Upserted UserMediaProfile for ${firebaseUser.email} (userId: ${userSavedToCore.id})`
+      )
 
       return userSavedToCore
     } catch (dbError) {
@@ -643,12 +699,12 @@ export async function ingestUsers(
   } = options
   const logger = new Logger(debug)
 
-  logger.log('👥 Starting user ingestion pipeline...')
-  logger.log(`📁 Source directory: ${sourceDir}`)
-  logger.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
-  logger.log(`⚡ Concurrency: ${concurrency} (balanced across 2 Okta tokens)`)
+  logger.info('👥 Starting user ingestion pipeline...')
+  logger.info(`📁 Source directory: ${sourceDir}`)
+  logger.info(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  logger.info(`⚡ Concurrency: ${concurrency} (balanced across 2 Okta tokens)`)
   if (file) {
-    logger.log(`📄 Processing single file: ${file}`)
+    logger.info(`📄 Processing single file: ${file}`)
   }
 
   // Clear errors directory at the beginning
@@ -665,7 +721,7 @@ export async function ingestUsers(
     return null
   }
 
-  logger.log(`📊 Found ${userFiles.length} user files to process`)
+  logger.info(`📊 Found ${userFiles.length} user files to process`)
 
   let progressBar: cliProgress.SingleBar | null = null
   if (!debug) {

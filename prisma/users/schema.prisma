@@ -11,14 +11,16 @@ datasource db {
 
 // Add your models here
 model User {
-  ownerId String @id
-  email String @unique
-  ssoGuid String @unique
-  coreId String @unique
+  ownerId       String  @id
+  email         String  @unique
+  ssoGuid       String  @unique
+  coreId        String  @unique
+  firebaseUserId String? @unique
 
   @@index([email])
   @@index([ssoGuid])
   @@index([coreId])
+  @@index([firebaseUserId])
 
   @@unique([ownerId, email, ssoGuid, coreId])
 }
