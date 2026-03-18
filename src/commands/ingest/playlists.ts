@@ -257,6 +257,21 @@ async function processPlaylistFile(
         )
         return null
       }
+      if (!relatedUser.firebaseUserId) {
+        const error = new Error(
+          `Firebase user ID not found for user ${relatedUser.ownerId} (playlist: ${processedPlaylist.name})`
+        )
+        logger.warn(`⚠️ ${error.message}`)
+        await writeErrorToFile(
+          sourceDir,
+          'playlists',
+          filePath,
+          error,
+          logger,
+          processedPlaylist
+        )
+        return null
+      }
       // Check if playlist already exists to determine if we need to generate a slug
       const existingPlaylist = await prismaApiMedia.playlist.findUnique({
         where: { id: processedPlaylist.id },
@@ -269,7 +284,7 @@ async function processPlaylistFile(
         name: processedPlaylist.name,
         note: processedPlaylist.note,
         noteUpdatedAt: processedPlaylist.noteModifiedAt,
-        ownerId: relatedUser.coreId,
+        ownerId: relatedUser.firebaseUserId,
         createdAt: processedPlaylist.createdAt,
         updatedAt: processedPlaylist.updatedAt,
         slug,
@@ -279,7 +294,7 @@ async function processPlaylistFile(
         name: processedPlaylist.name,
         note: processedPlaylist.note,
         noteUpdatedAt: processedPlaylist.noteModifiedAt,
-        ownerId: relatedUser.coreId,
+        ownerId: relatedUser.firebaseUserId,
         updatedAt: processedPlaylist.updatedAt,
         // Don't update slug or createdAt on existing playlists
       }
