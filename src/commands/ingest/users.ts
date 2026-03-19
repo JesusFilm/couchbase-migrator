@@ -723,8 +723,9 @@ export async function ingestUsers(
 
   logger.info(`📊 Found ${userFiles.length} user files to process`)
 
+  const isTTY = process.stdout.isTTY ?? false
   let progressBar: cliProgress.SingleBar | null = null
-  if (!debug) {
+  if (!debug && isTTY) {
     progressBar = new cliProgress.SingleBar(
       {
         format:
@@ -770,6 +771,12 @@ export async function ingestUsers(
       if (progressBar) {
         progressBar.update(successCount + errorCount)
       }
+    }
+
+    if (!progressBar && !debug) {
+      const total = successCount + errorCount
+      const pct = ((total / userFiles.length) * 100).toFixed(1)
+      logger.info(`👥 Ingesting users: ${total}/${userFiles.length} (${pct}%)`)
     }
   }
 

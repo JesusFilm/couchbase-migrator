@@ -580,12 +580,12 @@ export async function ingestPlaylists(
   const logger = new Logger(debug)
   const playlistDir = path.join(sourceDir, 'pl')
 
-  logger.log('🎵 Starting playlist ingestion pipeline...')
-  logger.log(`📁 Source directory: ${playlistDir}`)
-  logger.log(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
-  logger.log(`⚡ Concurrency: ${concurrency}`)
+  logger.info('🎵 Starting playlist ingestion pipeline...')
+  logger.info(`📁 Source directory: ${playlistDir}`)
+  logger.info(`🔍 Dry run: ${dryRun ? 'Yes' : 'No'}`)
+  logger.info(`⚡ Concurrency: ${concurrency}`)
   if (file) {
-    logger.log(`📄 Processing single file: ${file}`)
+    logger.info(`📄 Processing single file: ${file}`)
   }
 
   // Clear errors directory at the beginning
@@ -611,10 +611,11 @@ export async function ingestPlaylists(
     return null
   }
 
-  logger.log(`📊 Found ${playlistFiles.length} playlist files to process`)
+  logger.info(`📊 Found ${playlistFiles.length} playlist files to process`)
 
+  const isTTY = process.stdout.isTTY ?? false
   let progressBar: cliProgress.SingleBar | null = null
-  if (!debug) {
+  if (!debug && isTTY) {
     progressBar = new cliProgress.SingleBar(
       {
         format:
@@ -654,6 +655,14 @@ export async function ingestPlaylists(
       if (progressBar) {
         progressBar.update(successCount + errorCount)
       }
+    }
+
+    if (!progressBar && !debug) {
+      const total = successCount + errorCount
+      const pct = ((total / playlistFiles.length) * 100).toFixed(1)
+      logger.info(
+        `🎵 Ingesting playlists: ${total}/${playlistFiles.length} (${pct}%)`
+      )
     }
   }
 
