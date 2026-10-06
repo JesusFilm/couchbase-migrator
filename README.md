@@ -83,3 +83,9 @@ pnpm dev ingest --pipeline all
 `reset:firebase` is used to batch delete firebase users. be warned this is dangerous - only do this in dev environment.
 
 This is becuase the email could be used to login to other Jesus Film Apps, ergo, this should only be used to test scripting in dev environments.
+
+## Offline CI
+
+Pull requests and pushes to `main` run lint, formatting, filesystem error-reporting tests, Prisma client generation from committed schemas, and the TypeScript build. Install uses `--ignore-scripts`: these checks do not execute the Couchbase native addon. No environment file, database introspection, migrations, Firebase, or Okta access is needed.
+
+Run `pnpm test` and `pnpm prisma:generate && pnpm build` locally. Successful CI validates offline code only; native Couchbase connectivity and end-to-end ingestion still require a separately authorized non-production integration environment.
