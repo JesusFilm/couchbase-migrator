@@ -37,7 +37,7 @@ importers:
         version: 6.19.1(typescript@5.9.2)
       uuid:
         specifier: ^13.0.0
-        version: 13.0.0
+        version: 13.0.2
       zod:
         specifier: ^4.1.5
         version: 4.1.5
@@ -2105,12 +2105,12 @@ packages:
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
 
-  uuid@11.1.0:
-    resolution: {integrity: sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==}
+  uuid@11.1.1:
+    resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
 
-  uuid@13.0.0:
-    resolution: {integrity: sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==}
+  uuid@13.0.2:
+    resolution: {integrity: sha512-vzi9uRZ926x4XV73S/4qQaTwPXM2JBj6/6lI/byHH1jOpCzb0zDbfytgA9LcN/hzb2l7WQSQnxITOVx5un/wGw==}
     hasBin: true
 
   uuid@8.3.2:
@@ -3447,7 +3447,7 @@ snapshots:
       jsonwebtoken: 9.0.2
       jwks-rsa: 3.2.0
       node-forge: 1.3.1
-      uuid: 11.1.0
+      uuid: 11.1.1
     optionalDependencies:
       '@google-cloud/firestore': 7.11.6
       '@google-cloud/storage': 7.17.3
@@ -4346,9 +4346,9 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
-  uuid@11.1.0: {}
+  uuid@11.1.1: {}
 
-  uuid@13.0.0: {}
+  uuid@13.0.2: {}
 
   uuid@8.3.2:
     optional: true
