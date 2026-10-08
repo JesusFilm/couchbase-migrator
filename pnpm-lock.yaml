@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  couchbase@3.2.7:
+    hash: 798e467a06c6284f629cab68b64e35f04bad7779de630975bb930f9f38cf42e7
+    path: patches/couchbase@3.2.7.patch
+
 importers:
 
   .:
@@ -22,7 +27,7 @@ importers:
         version: 14.0.0
       couchbase:
         specifier: ^3.2.7
-        version: 3.2.7
+        version: 3.2.7(patch_hash=798e467a06c6284f629cab68b64e35f04bad7779de630975bb930f9f38cf42e7)
       dotenv:
         specifier: ^17.2.2
         version: 17.2.2
@@ -3103,7 +3108,7 @@ snapshots:
     optionalDependencies:
       typescript: 5.9.3
 
-  couchbase@3.2.7:
+  couchbase@3.2.7(patch_hash=798e467a06c6284f629cab68b64e35f04bad7779de630975bb930f9f38cf42e7):
     dependencies:
       bindings: 1.5.0
       debug: 4.4.1
