@@ -37,3 +37,32 @@ for (const client of ['api-users', 'api-media', 'users']) {
     )
   })
 }
+
+// Import the operational module, but never call ingest or connect to a service.
+for (const [module, command] of [
+  ['ingest', 'ingest'],
+  ['buildCache', 'buildCache'],
+]) {
+  test(`packaged ${command} command resolves its complete import graph`, () => {
+    execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `const m = await import('./dist/commands/${module}.js'); if (typeof m.${command} !== 'function') throw Error('missing operational command')`,
+      ],
+      {
+        cwd,
+        env: {
+          ...env,
+          PRISMA_API_USERS_URL: 'postgresql://fixture@127.0.0.1:9/fixture',
+          PRISMA_API_MEDIA_URL: 'postgresql://fixture@127.0.0.1:9/fixture',
+          PRISMA_USERS_URL: 'file:offline-unused.sqlite',
+          OKTA_TOKEN: 'offline-fixture',
+          OKTA_TOKEN_2: 'offline-fixture',
+        },
+        timeout: 10000,
+      }
+    )
+  })
+}
