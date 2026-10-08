@@ -7,8 +7,6 @@
  */
 
 import { Command } from 'commander'
-import { buildCache } from './commands/buildCache.js'
-import { ingest } from './commands/ingest.js'
 import { Logger } from './lib/logger.js'
 
 // Create commander program
@@ -31,6 +29,7 @@ program
   .action(async options => {
     const logger = new Logger(options.debug || false)
     try {
+      const { buildCache } = await import('./commands/buildCache.js')
       await buildCache({
         ...options,
         debug: options.debug || false,
@@ -69,6 +68,7 @@ program
   .action(async options => {
     const logger = new Logger(options.debug || false)
     try {
+      const { ingest } = await import('./commands/ingest.js')
       await ingest({
         ...options,
         concurrency: options.concurrency
