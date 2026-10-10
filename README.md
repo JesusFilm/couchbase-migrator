@@ -8,6 +8,27 @@ Once the container is built, you need to switch to Node 18 in your terminal usin
 nvm use 18
 ```
 
+## Runtime and native SDK review
+
+The packaged help/version paths do not connect to databases or providers.
+Generate clients with `pnpm prisma:generate`, then run `pnpm build`.
+
+The repository currently locks Couchbase SDK 3.2.7. The vendor's Node.js
+[compatibility matrix](https://docs.couchbase.com/nodejs-sdk/current/project-docs/compatibility.html)
+lists Node 24 support from SDK 4.7.0. Compiling or importing SDK 3.2.7 on Node 24
+is local compatibility evidence only; it does not establish vendor support.
+
+A maintained runtime proposal is Node 24 with a separately reviewed Couchbase
+4.7.x SDK migration. That major SDK change needs review of the native backend,
+existing SDK calls and target server compatibility before operational acceptance.
+No SDK major upgrade is included here. Help/version smoke tests and offline unit
+tests do not establish migration, provider or database behavior.
+
+The existing `.nvmrc` and container still declare Node 18, while Commander 14
+requires Node >=20. This packaging repair does not resolve that runtime contract.
+The offline packaging acceptance was run with Node 24; native SDK acceptance
+remains incomplete until the runtime/SDK decision is reviewed.
+
 ## Environment Setup
 
 Before running the script, you need to set up the database URLs in your environment variables. The following environment variables are required:
