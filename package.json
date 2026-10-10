@@ -77,5 +77,16 @@
     "*.{json,md}": [
       "prettier --write"
     ]
-  }
+  },
+  "files": [
+    "dist",
+    "src",
+    "scripts",
+    "prisma",
+    "patches",
+    "pnpm-workspace.yaml",
+    "pnpm-lock.yaml",
+    "tsconfig.json",
+    ".nvmrc"
+  ]
 }
