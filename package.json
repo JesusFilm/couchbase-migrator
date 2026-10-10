@@ -61,7 +61,7 @@
     "@t3-oss/env-core": "^0.13.8",
     "cli-progress": "^3.12.0",
     "commander": "^14.0.0",
-    "couchbase": "^3.2.7",
+    "couchbase": "^4.7.1",
     "dotenv": "^17.2.2",
     "file-type": "^21.0.0",
     "firebase-admin": "^13.6.0",
@@ -80,5 +80,16 @@
   },
   "engines": {
     "node": ">=24 <25"
-  }
+  },
+  "files": [
+    "dist",
+    "src",
+    "scripts",
+    "prisma",
+    "patches",
+    "pnpm-workspace.yaml",
+    "pnpm-lock.yaml",
+    "tsconfig.json",
+    ".nvmrc"
+  ]
 }
