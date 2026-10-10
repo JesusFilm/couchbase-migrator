@@ -2,11 +2,30 @@
 
 ## Getting Started
 
-Once the container is built, you need to switch to Node 18 in your terminal using nvm:
+Once the container is built, use the Node version declared in `.nvmrc`:
 
 ```bash
-nvm use 18
+nvm use
 ```
+
+## Runtime and native SDK review
+
+Use Node 24 as declared in `.nvmrc`. This proposal updates Couchbase SDK 3.2.7
+to 4.7.1, replacing the legacy libcouchbase backend with Couchbase++ and
+removing the local C++ header patch. The application's optional TLS trust store
+is passed as `security.trustStorePath`, matching the SDK 4 connection options.
+
+The vendor's [compatibility matrix](https://docs.couchbase.com/nodejs-sdk/current/project-docs/compatibility.html)
+lists Node 24 support from SDK 4.7.0. Generate clients with
+`pnpm prisma:generate`, then run `pnpm build`. The build checks the real native
+SDK and packaged import graphs. Help/version paths do not connect to databases
+or providers.
+
+This is a major SDK/runtime migration requiring review. Offline unit/import and
+help/version tests do not establish operational behavior. Review native backend
+error/retry/timeout/query/diagnostics behavior, TLS certificate handling and
+compatibility with the intended Couchbase Server version before operational
+acceptance. No database or provider operation is part of this validation.
 
 ## Environment Setup
 

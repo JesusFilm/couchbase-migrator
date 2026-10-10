@@ -8,11 +8,11 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { z } from 'zod'
 import { v4 as uuidv4 } from 'uuid'
-import { prismaUsers } from '../../lib/prisma/users/client'
+import { prismaUsers } from '../../lib/prisma/users/client.js'
 import {
   prismaApiMedia,
   Prisma as PrismaApiMedia,
-} from '../../lib/prisma/api-media/client'
+} from '../../lib/prisma/api-media/client.js'
 import {
   writeErrorToFile,
   clearErrorsDirectory,

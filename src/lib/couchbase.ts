@@ -83,7 +83,7 @@ export class CouchbaseClient {
       }
 
       if (this.config.trustStorePath) {
-        options.trustStorePath = this.config.trustStorePath
+        options.security = { trustStorePath: this.config.trustStorePath }
       }
 
       this.cluster = await Cluster.connect(
