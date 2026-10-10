@@ -1,3 +1,6 @@
 onlyBuiltDependencies:
   - couchbase
   - esbuild
+
+patchedDependencies:
+  couchbase@3.2.7: patches/couchbase@3.2.7.patch

@@ -4,11 +4,11 @@
   "description": "",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-prisma-clients.mjs",
     "start": "node dist/main.js",
     "dev": "tsx src/main.ts",
     "clean": "rm -rf dist",
-    "prebuild": "npm run clean",
+    "prebuild": "node scripts/ensure-couchbase-native.mjs && npm run clean",
     "test": "tsx --test tests/*.test.ts",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
@@ -28,7 +28,9 @@
     "prisma:studio:api-users": "dotenv -e .env -- prisma studio --schema=prisma/api-users/schema.prisma",
     "prisma:studio:api-media": "dotenv -e .env -- prisma studio --schema=prisma/api-media/schema.prisma",
     "prisma:studio:users": "dotenv -e .env -- prisma studio --schema=prisma/users/schema.prisma",
-    "prisma:reset:users": "dotenv -e .env -- prisma migrate reset --schema=prisma/users/schema.prisma --force"
+    "prisma:reset:users": "dotenv -e .env -- prisma migrate reset --schema=prisma/users/schema.prisma --force",
+    "test:cli": "tsx --test scripts/cli.test.ts",
+    "postbuild": "pnpm test:cli"
   },
   "keywords": [],
   "author": "",
@@ -75,5 +77,19 @@
     "*.{json,md}": [
       "prettier --write"
     ]
-  }
+  },
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "files": [
+    "dist",
+    "src",
+    "scripts",
+    "prisma",
+    "patches",
+    "pnpm-workspace.yaml",
+    "pnpm-lock.yaml",
+    "tsconfig.json",
+    ".nvmrc"
+  ]
 }
