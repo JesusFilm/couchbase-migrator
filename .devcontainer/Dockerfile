@@ -1,7 +1,7 @@
-FROM --platform=linux/amd64 mcr.microsoft.com/devcontainers/javascript-node:1-18-bookworm
+FROM --platform=linux/amd64 mcr.microsoft.com/devcontainers/javascript-node:24-bookworm
 
 # Install pnpm
-RUN npm install -g pnpm@10.15.1
+RUN npm install -g pnpm@10.34.6
 
 # Install Cloudflare WARP client
 RUN curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && \

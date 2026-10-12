@@ -1,4 +1,4 @@
-import { PrismaClient } from './__generated__'
-export * from './__generated__'
+import { PrismaClient } from './__generated__/index.js'
+export * from './__generated__/index.js'
 
 export const prismaUsers = new PrismaClient()
